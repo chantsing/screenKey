@@ -108,9 +108,10 @@ jobs:
 
       - name: Install Python runtime deps (build to system site-packages first)
         env:
-          # pycairo installs py3cairo.pc under its prefix (typically
-          # /usr/local/lib64/pkgconfig on AlmaLinux). PyGObject's setup.py
-          # invokes `pkg-config --cflags py3cairo`, so expose every location.
+          # pycairo's pip-install does NOT install py3cairo.pc (only meson or
+          # `setup.py install` do), and PyGObject's setup.py requires it via
+          # `pkg-config --cflags py3cairo`. We generate it manually below and
+          # expose it through PKG_CONFIG_PATH.
           PKG_CONFIG_PATH: /usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/lib64/pkgconfig
         run: |
           set -eu
@@ -119,25 +120,61 @@ jobs:
           SYS_SP="$(python3 -c 'import site; print(site.getsitepackages()[0])')"
           echo "System site-packages: $SYS_SP"
           echo "Target AppDir site-packages: $SP"
-          # PyGObject's setup.py does a top-level `import cairo` and calls
-          # `pkg-config --cflags py3cairo` to find pycairo headers. Both must
-          # resolve against the BUILD env's site-packages, not --target=$SP
-          # (the build process cannot import from --target). So build to the
-          # system site-packages first, then copy the compiled artifacts
-          # (including py3cairo.pc and .so files) into AppDir.
+
+          # ---- 1. Build pycairo to system site-packages -------------------
           pip3 install -vvv --no-deps --no-build-isolation \
             pycairo==1.26.0
-          # Sanity-check pycairo is importable AND pkg-config can find it.
           python3 -c "import cairo; print('OK  pycairo', cairo.version_info)"
-          pkg-config --exists py3cairo && echo "OK  py3cairo.pc ($(pkg-config --modversion py3cairo))" \
-            || { echo "MISSING py3cairo.pc; searching..."; find / -name 'py3cairo.pc' 2>/dev/null; exit 1; }
-          # Now PyGObject can build: it sees pycairo in site-packages and
-          # py3cairo.pc via PKG_CONFIG_PATH. dbus-python also needs no isolation.
+
+          # ---- 2. Locate or generate py3cairo.pc --------------------------
+          # pycairo 1.26 installed via pip drops py3cairo.pc next to the
+          # package OR not at all (depends on which command ran install_pkgconfig).
+          # Search everywhere first; fall back to generating it manually using
+          # the actual install prefix so PyGObject's pkg-config lookup works.
+          PYCAIRO_DIR="$(python3 -c 'import cairo, os; print(os.path.dirname(cairo.__file__))')"
+          PYCAIRO_VER="$(python3 -c 'import cairo; print(".".join(map(str, cairo.version_info)))')"
+          PYCAIRO_PREFIX="$(python3 -c 'import sys; print(sys.prefix)')"
+          echo "pycairo package dir: $PYCAIRO_DIR"
+          echo "pycairo version:     $PYCAIRO_VER"
+          echo "pycairo prefix:      $PYCAIRO_PREFIX"
+
+          PC_FILE="$(find / -name 'py3cairo.pc' 2>/dev/null | head -n1 || true)"
+          if [ -n "$PC_FILE" ]; then
+            echo "Found existing py3cairo.pc at: $PC_FILE"
+            PC_DIR="$(dirname "$PC_FILE")"
+          else
+            echo "py3cairo.pc not installed by pip; generating one next to the package"
+            PC_DIR="$PYCAIRO_DIR"
+            # pycairo ships its header as `pycairo.h` inside the package dir,
+            # so cflags must point at $PYCAIRO_DIR (so `#include <pycairo.h>` resolves).
+            cat > "$PC_DIR/py3cairo.pc" <<EOF
+          prefix=$PYCAIRO_PREFIX
+          exec_prefix=\${prefix}
+          libdir=\${exec_prefix}/lib
+          includedir=$PYCAIRO_DIR
+
+          Name: Pycairo
+          Description: Python bindings for cairo
+          Version: $PYCAIRO_VER
+          Requires: cairo
+          Cflags: -I\${includedir}
+          EOF
+          fi
+          export PKG_CONFIG_PATH="$PC_DIR:$PKG_CONFIG_PATH"
+          pkg-config --exists py3cairo \
+            && echo "OK  py3cairo.pc ($(pkg-config --modversion py3cairo))" \
+            || { echo "STILL MISSING py3cairo.pc; PKG_CONFIG_PATH=$PKG_CONFIG_PATH"; exit 1; }
+          ls -la "$PC_DIR/py3cairo.pc" 2>/dev/null || true
+          # Verify pycairo.h is actually findable via the cflags we just set.
+          echo "py3cairo cflags: $(pkg-config --cflags py3cairo)"
+          ls -la "$(pkg-config --cflags-only-I py3cairo | sed 's/^-I//')/pycairo.h" 2>/dev/null \
+            || echo "WARN: pycairo.h not at expected location; PyGObject build may still fail"
+
+          # ---- 3. Build PyGObject (now sees pycairo + py3cairo.pc) --------
           pip3 install -vvv --no-deps --no-build-isolation \
             PyGObject==3.48.2 dbus-python==1.3.2 babel==2.15.0
-          # Copy everything we just built into AppDir's site-packages.
-          # Include both top-level packages and the *.dist-info dirs so
-          # importlib.metadata works at runtime.
+
+          # ---- 4. Copy compiled artifacts into AppDir ---------------------
           for item in pycairo PyGObject gi cairo cairo/_cairo*.so \
                        dbus dbus_python*.dist-info pycairo*.dist-info \
                        PyGObject*.dist-info babel*.dist-info; do
@@ -145,7 +182,6 @@ jobs:
               [ -e "$src" ] && cp -a "$src" "$SP/"
             done
           done
-          # Re-run from AppDir to confirm the bundled copies still import.
           PYTHONPATH="$SP" python3 -c 'import cairo, gi, dbus; print("imports OK from AppDir")'
 
       - name: Copy Screenkey package into AppDir
