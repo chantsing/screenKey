@@ -170,17 +170,34 @@ jobs:
           ls -la "$(pkg-config --cflags-only-I py3cairo | sed 's/^-I//')/pycairo.h" 2>/dev/null \
             || echo "WARN: pycairo.h not at expected location; PyGObject build may still fail"
 
-          # ---- 3. Build PyGObject + dbus-python (both setuptools) --------
-          # PyGObject 3.48.2 required gobject-introspection >= 1.64.0, but
-          # AlmaLinux 8 / manylinux2.28 only ships 1.56.1 and we cannot bump
-          # glibc. PyGObject 3.44.1 (April 2022) requires g-i >= 1.46.0 and
-          # still builds with classic setuptools.
-          # dbus-python 1.3.2 switched to meson-python backend (which also
-          # hides setup errors as `metadata-generation-failed`); use 1.2.18
-          # (March 2020, last setuptools release). It's mostly C code so
-          # Python 3.11 ABI compatibility is unaffected.
+          # ---- 3. Build PyGObject (setuptools) + dbus-python (meson direct) -
+          # PyGObject 3.44.1 builds with setuptools (sees pycairo + py3cairo.pc).
+          # dbus-python 1.2.18 (last setuptools version) fails with
+          # "No available output" on Python 3.11 / modern setuptools; 1.3.2
+          # uses meson-python, but pip wraps meson's errors as
+          # `metadata-generation-failed`. Build 1.3.2 directly with meson so
+          # we get the real pkg-config / dependency errors on the log.
           pip3 install -vvv --no-deps --no-build-isolation PyGObject==3.44.1
-          pip3 install -vvv --no-deps --no-build-isolation dbus-python==1.2.18
+          pip3 install meson-python meson ninja
+          ln -sf "$(python3 -c 'import sys; print(sys.prefix)')/bin/meson" /usr/local/bin/meson
+          ln -sf "$(python3 -c 'import sys; print(sys.prefix)')/bin/ninja" /usr/local/bin/ninja
+          command -v meson && meson --version
+          command -v ninja && ninja --version
+
+          cd /tmp
+          rm -rf dbus-python-1.3.2 dbus-python-1.3.2.tar.gz
+          pip3 download --no-deps --no-binary=:all: --no-build-isolation dbus-python==1.3.2
+          tar xf dbus-python-1.3.2.tar.gz
+          cd dbus-python-1.3.2
+          meson setup build --prefix=/usr/local --libdir=lib -Dtests=false || {
+            echo "===== meson setup failed; meson-log.txt ====="
+            cat build/meson-logs/meson-log.txt 2>/dev/null || true
+            exit 1
+          }
+          meson compile -C build
+          meson install -C build
+          cd "$GITHUB_WORKSPACE"
+
           pip3 install -vvv --no-deps --no-build-isolation babel==2.15.0
 
           # ---- 4. Copy compiled artifacts into AppDir ---------------------
