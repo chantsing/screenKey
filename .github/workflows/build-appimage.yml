@@ -365,6 +365,109 @@ jobs:
           # Sanity-check: encodings module must be present.
           ls "AppDir/usr/lib/python${PYVER}/encodings/__init__.py"
 
+      - name: Stage python-dynload runtime libs (libffi.so.6, etc.)
+        run: |
+          set -eu
+          # The CPython interpreter ships a set of C extensions under
+          # lib/pythonX.Y/lib-dynload (e.g. _ctypes, _ssl, _lzma, ...).  Each
+          # of those .so files may link additional system libraries such as
+          # libffi.so.6 (_ctypes) or libssl/libcrypto (_ssl).  linuxdeploy
+          # only scans ELF files reachable from the desktop Exec entry point
+          # and the libraries it explicitly pulls in; because these python
+          # modules are loaded dynamically at runtime via dlopen(), linuxdeploy
+          # never follows their NEEDED entries and the host is left to provide
+          # them.  That breaks on any distribution whose libffi SONAME differs
+          # from AlmaLinux 8's (e.g. Kali ships libffi.so.8 only), producing:
+          #   ImportError: libffi.so.6: cannot open shared object file
+          # To fix it, we walk every lib-dynload/*.so, run ldd against each,
+          # collect the transitive closure of libraries that live outside the
+          # glibc/libgcc search paths, and copy them into AppDir/usr/lib so
+          # linuxdeploy (and the runtime loader) can find them.
+          DYNL="AppDir/usr/lib/python${PYVER}/lib-dynload"
+          LIBDEST="AppDir/usr/lib"
+          mkdir -p "$LIBDEST"
+          echo "== Scanning lib-dynload dependencies =="
+          echo "lib-dynload contents:"
+          ls -1 "$DYNL" 2>/dev/null || true
+
+          # Libraries that MUST be bundled.  We use both an explicit allow-list
+          # (so we never accidentally bundle glibc/ld-linux/libgcc_s which the
+          # AppImage project explicitly forbids) AND a copy-all-from-ldd pass.
+          # The allow-list catches libffi reliably across rebuilds; the ldd pass
+          # is a safety net for any other indirect dependency added later.
+          EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid"
+
+          copied=0
+          # ---- Explicit allow-list first (most reliable) -------------------
+          for libname in $EXPLICIT_ALLOWLIST; do
+            # Resolve the real .so.X SONAME (not the bare .so symlink).
+            soname="$(ldconfig -p 2>/dev/null | awk -v n="$libname" '$1 == n".so" || $1 ~ "^"n"\\.so\\.[0-9]" {print $4; exit}')"
+            if [ -z "$soname" ]; then
+              # ldconfig cache may be empty in containers; fall back to find.
+              soname="$(find /usr/lib64 /usr/lib /lib64 /lib -maxdepth 2 -name "${libname}.so*" -type f 2>/dev/null | head -n1 || true)"
+            fi
+            if [ -n "$soname" ] && [ -f "$soname" ]; then
+              real="$(readlink -f "$soname")"
+              base_soname="$(basename "$soname")"
+              base_real="$(basename "$real")"
+              cp -a "$real" "$LIBDEST/$base_real"
+              if [ "$base_soname" != "$base_real" ]; then
+                ( cd "$LIBDEST" && ln -sf "$base_real" "$base_soname" )
+              fi
+              echo "OK  allow-list: $libname -> $base_real (SONAME: $base_soname)"
+              copied=$((copied+1))
+            else
+              echo "SKIP allow-list: $libname (not found on build host)"
+            fi
+          done
+
+          # ---- ldd safety-net pass (avoids glibc/gcc runtime) -------------
+          # Skip libs whose SONAME starts with any of these prefixes.
+          SKIP_PREFIXES="libc.so libdl.so libm.so libpthread.so librt.so \
+                         libresolv.so libutil.so libnsl.so libnss_ libcrypt.so \
+                         ld-linux ld-linux-x86 libgcc_s.so libstdc++.so libgpg-error.so"
+          should_skip() {
+            local son="$1" pre
+            for pre in $SKIP_PREFIXES; do
+              case "$son" in
+                "$pre"*) return 0 ;;
+              esac
+            done
+            return 1
+          }
+
+          for so in "$DYNL"/*.so; do
+            [ -f "$so" ] || continue
+            # ldd prints lines such as:
+            #   libffi.so.6 => /lib64/libffi.so.6 (0x...)
+            # We extract the absolute path (=> /path) for each entry.
+            while IFS= read -r line; do
+              path="$(echo "$line" | sed -n 's/.*=>[[:space:]]*\(\/[^[:space:]]*\).*/\1/p')"
+              [ -n "$path" ] && [ -f "$path" ] || continue
+              soname="$(basename "$path")"
+              if should_skip "$soname"; then continue; fi
+              # Already copied via allow-list?
+              if [ -e "$LIBDEST/$soname" ]; then continue; fi
+              real="$(readlink -f "$path")"
+              base_real="$(basename "$real")"
+              cp -a "$real" "$LIBDEST/$base_real"
+              if [ "$soname" != "$base_real" ] && [ ! -e "$LIBDEST/$soname" ]; then
+                ( cd "$LIBDEST" && ln -sf "$base_real" "$soname" )
+              fi
+              echo "OK  ldd-discovered: $soname -> $base_real (from $so)"
+              copied=$((copied+1))
+            done < <(ldd "$so" 2>/dev/null || true)
+          done
+
+          echo "== Total runtime libs pre-staged: $copied =="
+          ls -la "$LIBDEST" | head -n 40 || true
+
+          # Sanity check: libffi.so.6 must now exist in AppDir/usr/lib.
+          if ! ls "$LIBDEST"/libffi.so.6* >/dev/null 2>&1; then
+            echo "FAIL: libffi.so.6 not present in $LIBDEST after staging step"
+            exit 1
+          fi
+
       - name: Stage desktop / icon / AppRun
         run: |
           set -eu
@@ -427,6 +530,12 @@ jobs:
           export GTK_PATH="$HERE/usr/lib/gtk-3.0"
           export XDG_DATA_DIRS="$HERE/usr/share:$XDG_DATA_DIRS"
           export FONTCONFIG_PATH="$HERE/etc/fonts"
+          # AppRun sets LD_LIBRARY_PATH so the loader first looks inside the
+          # AppImage for shared libs. This is the critical fix for the
+          # libffi.so.6 issue: the pre-staged libffi in usr/lib must be found
+          # before any host-installed version, otherwise on hosts that DO ship
+          # libffi.so.6 we still pick up the host copy and lose portability.
+          export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
           # -s: don't add user site-packages. -E must NOT be used: it would
           # ignore PYTHONHOME/PYTHONPATH and break stdlib + site-packages
           # resolution inside the AppImage.
