@@ -1,0 +1,710 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: ScreenKey 1.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2020-07-24 23:25+0800\n"
+"PO-Revision-Date: 2020-07-25 12:14+0800\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"Last-Translator: WhiredPlanck <fungdaat31@outlook.com>\n"
+"Language-Team: \n"
+"X-Generator: Poedit 2.3.1\n"
+
+#: Screenkey/__init__.py:12
+msgid "Screencast your keys"
+msgstr "Screencast your keys"
+
+#: Screenkey/__init__.py:22
+msgid "Top"
+msgstr "顶部"
+
+#: Screenkey/__init__.py:23
+msgid "Center"
+msgstr "中央"
+
+#: Screenkey/__init__.py:24
+msgid "Bottom"
+msgstr "底部"
+
+#: Screenkey/__init__.py:25
+msgid "Fixed"
+msgstr "固定位置"
+
+#: Screenkey/__init__.py:29
+msgid "Large"
+msgstr "大"
+
+#: Screenkey/__init__.py:30
+msgid "Medium"
+msgstr "中"
+
+#: Screenkey/__init__.py:31
+msgid "Small"
+msgstr "小"
+
+# i18n hint: "Composed" attempts to show only the final results of key composition. 
+# Dead keys and any intermediate output during composition is not shown. 
+# Currently works correctly with XIM/IBUS, but only for on-the-spot editing. 
+# It can cause problems with complex input methods (support for wider compatibility is underway).
+#: Screenkey/__init__.py:35
+msgid "Composed"
+msgstr "组合"
+
+# i18n hint: "Translated" shows the result of each keypress on the keyboard, accounting for the current keyboard locale and modifiers, but not
+# composition. Pressing a dead key followed by a letter will show both keys.
+#: Screenkey/__init__.py:36
+msgid "Translated"
+msgstr "翻译"
+
+# i18n hint: "Keysyms" shows the keysyms ("symbolic" names) of each pressed key as received by the server. Mostly useful for debugging.
+#: Screenkey/__init__.py:37
+msgid "Keysyms"
+msgstr "按键名"
+
+# i18n hint: "Raw" shows which key caps were pressed on the keyboard, without translation. For example, typing "!" (which is often located on top of the key "1") requires pressing "Shift+1", which is what this output
+# mode shows. "Backspace mode", "Always visible Shift" and "Modifiers only" have no effect in this mode.
+#: Screenkey/__init__.py:38
+msgid "Raw"
+msgstr "原始"
+
+# i18n hint: "Normal" always inserts a backspace symbol in the output window.
+#: Screenkey/__init__.py:42 Screenkey/__init__.py:48
+msgid "Normal"
+msgstr "正常"
+
+# i18n hint: "Baked" simulates the effect of backspace in the text only if the last keypress is a regular letter and no caret movement has been detected. In any other case, a backspace symbol is inserted instead.
+#: Screenkey/__init__.py:43
+msgid "Baked"
+msgstr "烘烤"
+
+# i18n hint: "Full" is similar to "baked", but will eat through several other, less safe keys, such as tabs and returns.
+#: Screenkey/__init__.py:44
+msgid "Full"
+msgstr "完整"
+
+#: Screenkey/__init__.py:49
+msgid "Emacs"
+msgstr "Emacs"
+
+#: Screenkey/__init__.py:50
+msgid "Mac"
+msgstr "Mac"
+
+#: Screenkey/__init__.py:51
+msgid "Windows"
+msgstr "Windows"
+
+#: Screenkey/__init__.py:52
+msgid "Linux"
+msgstr "Linux"
+
+#: Screenkey/labelmanager.py:28
+msgid "Esc"
+msgstr "Esc"
+
+#: Screenkey/labelmanager.py:29 Screenkey/labelmanager.py:30
+msgid "↹"
+msgstr "↹"
+
+#: Screenkey/labelmanager.py:31 Screenkey/labelmanager.py:72
+msgid "⏎"
+msgstr "⏎"
+
+#: Screenkey/labelmanager.py:32
+msgid "␣"
+msgstr "␣"
+
+#: Screenkey/labelmanager.py:33
+msgid "⌫"
+msgstr "⌫"
+
+#: Screenkey/labelmanager.py:34
+msgid "Caps"
+msgstr "Caps"
+
+#: Screenkey/labelmanager.py:35
+msgid "F1"
+msgstr "F1"
+
+#: Screenkey/labelmanager.py:36
+msgid "F2"
+msgstr "F2"
+
+#: Screenkey/labelmanager.py:37
+msgid "F3"
+msgstr "F3"
+
+#: Screenkey/labelmanager.py:38
+msgid "F4"
+msgstr "F4"
+
+#: Screenkey/labelmanager.py:39
+msgid "F5"
+msgstr "F5"
+
+#: Screenkey/labelmanager.py:40
+msgid "F6"
+msgstr "F6"
+
+#: Screenkey/labelmanager.py:41
+msgid "F7"
+msgstr "F7"
+
+#: Screenkey/labelmanager.py:42
+msgid "F8"
+msgstr "F8"
+
+#: Screenkey/labelmanager.py:43
+msgid "F9"
+msgstr "F9"
+
+#: Screenkey/labelmanager.py:44
+msgid "F10"
+msgstr "F10"
+
+#: Screenkey/labelmanager.py:45
+msgid "F11"
+msgstr "F11"
+
+#: Screenkey/labelmanager.py:46
+msgid "F12"
+msgstr "F12"
+
+#: Screenkey/labelmanager.py:47
+msgid "↑"
+msgstr "↑"
+
+#: Screenkey/labelmanager.py:48
+msgid "←"
+msgstr "←"
+
+#: Screenkey/labelmanager.py:49
+msgid "→"
+msgstr "→"
+
+#: Screenkey/labelmanager.py:50
+msgid "↓"
+msgstr "↓"
+
+#: Screenkey/labelmanager.py:51
+msgid "PgUp"
+msgstr "PgUp"
+
+#: Screenkey/labelmanager.py:52
+msgid "PgDn"
+msgstr "PgDn"
+
+#: Screenkey/labelmanager.py:53
+msgid "Home"
+msgstr "Home"
+
+#: Screenkey/labelmanager.py:54
+msgid "End"
+msgstr "End"
+
+#: Screenkey/labelmanager.py:55
+msgid "Ins"
+msgstr "Ins"
+
+#: Screenkey/labelmanager.py:56
+msgid "Del"
+msgstr "Del"
+
+#: Screenkey/labelmanager.py:57
+msgid "(1)"
+msgstr "(1)"
+
+#: Screenkey/labelmanager.py:58
+msgid "(2)"
+msgstr "(2)"
+
+#: Screenkey/labelmanager.py:59
+msgid "(3)"
+msgstr "(3)"
+
+#: Screenkey/labelmanager.py:60
+msgid "(4)"
+msgstr "(4)"
+
+#: Screenkey/labelmanager.py:61
+msgid "(5)"
+msgstr "(5)"
+
+#: Screenkey/labelmanager.py:62
+msgid "(6)"
+msgstr "(6)"
+
+#: Screenkey/labelmanager.py:63
+msgid "(7)"
+msgstr "(7)"
+
+#: Screenkey/labelmanager.py:64
+msgid "(8)"
+msgstr "(8)"
+
+#: Screenkey/labelmanager.py:65
+msgid "(9)"
+msgstr "(9)"
+
+#: Screenkey/labelmanager.py:66
+msgid "(0)"
+msgstr "(0)"
+
+#: Screenkey/labelmanager.py:67
+msgid "(.)"
+msgstr "(.)"
+
+#: Screenkey/labelmanager.py:68
+msgid "(+)"
+msgstr "(+)"
+
+#: Screenkey/labelmanager.py:69
+msgid "(-)"
+msgstr "(-)"
+
+#: Screenkey/labelmanager.py:70
+msgid "(*)"
+msgstr "(*)"
+
+#: Screenkey/labelmanager.py:71
+msgid "(/)"
+msgstr "(/)"
+
+#: Screenkey/labelmanager.py:73
+msgid "NumLck"
+msgstr "NumLck"
+
+#: Screenkey/labelmanager.py:74
+msgid "ScrLck"
+msgstr "ScrLck"
+
+#: Screenkey/labelmanager.py:75
+msgid "Pause"
+msgstr "Pause"
+
+#: Screenkey/labelmanager.py:76
+msgid "Break"
+msgstr "Break"
+
+#: Screenkey/labelmanager.py:77
+msgid "Print"
+msgstr "Print"
+
+#: Screenkey/labelmanager.py:78
+msgid "Compose"
+msgstr "Compose"
+
+#: Screenkey/labelmanager.py:81 Screenkey/labelmanager.py:82
+msgid "\\uf026"
+msgstr "\\uf026"
+
+#: Screenkey/labelmanager.py:83
+msgid "Mute"
+msgstr "静音"
+
+#: Screenkey/labelmanager.py:84 Screenkey/labelmanager.py:85
+msgid "\\uf131"
+msgstr "\\uf131"
+
+#: Screenkey/labelmanager.py:86
+msgid "Rec"
+msgstr "录音/麦克风"
+
+#: Screenkey/labelmanager.py:87 Screenkey/labelmanager.py:88
+msgid "\\uf028"
+msgstr "\\uf028"
+
+#: Screenkey/labelmanager.py:89 Screenkey/labelmanager.py:92
+msgid "Vol"
+msgstr "音量"
+
+#: Screenkey/labelmanager.py:90 Screenkey/labelmanager.py:91
+msgid "\\uf027"
+msgstr "\\uf027"
+
+#: Screenkey/labelmanager.py:93 Screenkey/labelmanager.py:94
+msgid "\\uf048"
+msgstr "\\uf048"
+
+#: Screenkey/labelmanager.py:95
+msgid "Prev"
+msgstr "上一个"
+
+#: Screenkey/labelmanager.py:96 Screenkey/labelmanager.py:97
+msgid "\\uf051"
+msgstr "\\uf051"
+
+#: Screenkey/labelmanager.py:98
+msgid "Next"
+msgstr "下一个"
+
+#: Screenkey/labelmanager.py:99 Screenkey/labelmanager.py:100
+msgid "\\uf04b"
+msgstr "\\uf04b"
+
+#: Screenkey/labelmanager.py:101
+msgid "▶"
+msgstr "▶"
+
+#: Screenkey/labelmanager.py:102 Screenkey/labelmanager.py:103
+msgid "\\uf04d"
+msgstr "\\uf04d"
+
+#: Screenkey/labelmanager.py:104
+msgid "⬛"
+msgstr "⬛"
+
+#: Screenkey/labelmanager.py:105 Screenkey/labelmanager.py:106
+msgid "\\uf052"
+msgstr "\\uf052"
+
+#: Screenkey/labelmanager.py:107
+msgid "Eject"
+msgstr "弹出"
+
+#: Screenkey/labelmanager.py:108 Screenkey/labelmanager.py:109
+#: Screenkey/labelmanager.py:111 Screenkey/labelmanager.py:112
+msgid "\\uf185"
+msgstr "\\uf185"
+
+#: Screenkey/labelmanager.py:110 Screenkey/labelmanager.py:113
+msgid "Bright"
+msgstr "亮度"
+
+#: Screenkey/labelmanager.py:114 Screenkey/labelmanager.py:115
+msgid "\\uf108"
+msgstr "\\uf108"
+
+#: Screenkey/labelmanager.py:116
+msgid "Display"
+msgstr "显示"
+
+#: Screenkey/labelmanager.py:117 Screenkey/labelmanager.py:118
+msgid "\\uf1eb"
+msgstr "\\uf1eb"
+
+#: Screenkey/labelmanager.py:119
+msgid "WLAN"
+msgstr "WLAN"
+
+#: Screenkey/labelmanager.py:120 Screenkey/labelmanager.py:121
+msgid "\\uf002"
+msgstr "\\uf002"
+
+#: Screenkey/labelmanager.py:122
+msgid "Search"
+msgstr "搜索"
+
+#: Screenkey/labelmanager.py:123 Screenkey/labelmanager.py:124
+msgid "\\uf294"
+msgstr "\\uf294"
+
+#: Screenkey/labelmanager.py:125
+msgid "Bluetooth"
+msgstr "蓝牙"
+
+#: Screenkey/labelmanager.py:126
+msgid "\\uf7d9"
+msgstr "\\uf7d9"
+
+#: Screenkey/labelmanager.py:127
+msgid "🛠"
+msgstr "🛠"
+
+#: Screenkey/labelmanager.py:128 Screenkey/labelmanager.py:129
+msgid "\\uf005"
+msgstr "\\uf005"
+
+#: Screenkey/labelmanager.py:130
+msgid "🟊"
+msgstr "🟊"
+
+#: Screenkey/labelmanager.py:145
+msgid "Shift+"
+msgstr "Shift+"
+
+#: Screenkey/labelmanager.py:145
+msgid "⇧+"
+msgstr "⇧+"
+
+#: Screenkey/labelmanager.py:146
+msgid "Ctrl+"
+msgstr "Ctrl+"
+
+#: Screenkey/labelmanager.py:146
+msgid "⌘+"
+msgstr "⌘+"
+
+#: Screenkey/labelmanager.py:147
+msgid "Alt+"
+msgstr "Alt+"
+
+#: Screenkey/labelmanager.py:147
+msgid "⌥+"
+msgstr "⌥+"
+
+#: Screenkey/labelmanager.py:148
+msgid "Super+"
+msgstr "Super+"
+
+#: Screenkey/labelmanager.py:149 Screenkey/labelmanager.py:150
+msgid "\\uf17a"
+msgstr "\\uf17a"
+
+#: Screenkey/labelmanager.py:151
+msgid "Win"
+msgstr "Win"
+
+#: Screenkey/labelmanager.py:152 Screenkey/labelmanager.py:153
+msgid "\\uf17c"
+msgstr "\\uf17c"
+
+#: Screenkey/labelmanager.py:154
+msgid "Super"
+msgstr "Super"
+
+#: Screenkey/labelmanager.py:155
+msgid "Hyper+"
+msgstr "Hyper+"
+
+#: Screenkey/labelmanager.py:156
+msgid "AltGr+"
+msgstr "AltGr+"
+
+#: Screenkey/labelmanager.py:433 Screenkey/labelmanager.py:474
+msgid "off"
+msgstr "关"
+
+#: Screenkey/labelmanager.py:433 Screenkey/labelmanager.py:474
+msgid "on"
+msgstr "开"
+
+#: Screenkey/screenkey.py:289
+#, python-brace-format
+msgid ""
+"Screenkey failed to initialize. This is usually a sign of an improperly "
+"configured input method or desktop keyboard settings. Please see the <a href="
+"\"{url}\">troubleshooting documentation</a> for further diagnosing "
+"instructions.\n"
+"\n"
+"Screenkey cannot recover and will now quit!"
+msgstr ""
+"Screenkey 初始化失败。这通常表示输入法或桌面键盘设置配置不正确。请参阅 <a "
+"href=\"{url}\">故障排除文档</a> 以获取进一步的诊断说明。\n"
+"\n"
+"Screenkey 无法恢复启动，现在将退出！"
+
+#: Screenkey/screenkey.py:478
+#, python-brace-format
+msgid ""
+"\"slop\" is required for interactive selection. See <a href=\"{url}\">{url}</"
+"a>"
+msgstr "交互式选择依赖 \"slop\" 软件包。参见 <a href=\"{url}\">{url}</a>"
+
+#: Screenkey/screenkey.py:525
+msgid "Time"
+msgstr "显示时间"
+
+#: Screenkey/screenkey.py:533
+msgid "Display for"
+msgstr "持续显示"
+
+#: Screenkey/screenkey.py:534
+msgid "seconds"
+msgstr "秒"
+
+#: Screenkey/screenkey.py:547
+msgid "Persistent window"
+msgstr "保持窗口可见"
+
+#: Screenkey/screenkey.py:554 Screenkey/screenkey.py:571
+msgid "Position"
+msgstr "显示位置"
+
+#: Screenkey/screenkey.py:562
+msgid "Screen"
+msgstr "屏幕"
+
+#: Screenkey/screenkey.py:580
+msgid "Reset"
+msgstr "重置"
+
+#: Screenkey/screenkey.py:588
+msgid "Select window/region"
+msgstr "选择窗口/区域"
+
+#: Screenkey/screenkey.py:598 Screenkey/screenkey.py:608
+msgid "Font"
+msgstr "字体"
+
+#: Screenkey/screenkey.py:617
+msgid "Size"
+msgstr "大小"
+
+#: Screenkey/screenkey.py:632
+msgid "Keys"
+msgstr "按键"
+
+#: Screenkey/screenkey.py:640
+msgid "Keyboard mode"
+msgstr "键盘模式"
+
+#: Screenkey/screenkey.py:649
+msgid "Backspace mode"
+msgstr "退格模式"
+
+#: Screenkey/screenkey.py:658
+msgid "Modifiers mode"
+msgstr "修饰符模式"
+
+#: Screenkey/screenkey.py:667
+msgid "Show Modifier sequences only"
+msgstr "仅显示修饰符序列"
+
+#: Screenkey/screenkey.py:671
+msgid "Always show Shift"
+msgstr "总是显示 Shift 按键"
+
+#: Screenkey/screenkey.py:675
+msgid "Show Whitespace characters"
+msgstr "显示空白字符(空格和 Tab 键)"
+
+#: Screenkey/screenkey.py:680
+msgid "Compress repeats after"
+msgstr "压缩显示重复阈值"
+
+#: Screenkey/screenkey.py:705
+msgid "Color"
+msgstr "颜色"
+
+#: Screenkey/screenkey.py:714
+msgid "Font color"
+msgstr "字体颜色"
+
+#: Screenkey/screenkey.py:717
+msgid "Text color"
+msgstr "文字颜色"
+
+#: Screenkey/screenkey.py:721 Screenkey/screenkey.py:724
+msgid "Background color"
+msgstr "背景颜色"
+
+#: Screenkey/screenkey.py:728
+msgid "Opacity"
+msgstr "透明度"
+
+#: Screenkey/screenkey.py:762
+msgid "Show keys"
+msgstr "显示按键"
+
+#: Screenkey/screenkey.py:768
+msgid "Preferences"
+msgstr "偏好设置"
+
+#: Screenkey/screenkey.py:773
+msgid "About"
+msgstr "关于"
+
+#: Screenkey/screenkey.py:782
+msgid "Quit"
+msgstr "退出"
+
+#: screenkey:42
+msgid "enable debugging"
+msgstr "启用调试"
+
+#: screenkey:44
+msgid "do not create system tray icon"
+msgstr "不创建系统托盘图标"
+
+#: screenkey:45
+msgid "timeout in seconds"
+msgstr "超时时间 (以秒为单位)"
+
+#: screenkey:47
+msgid "set vertical position"
+msgstr "设置垂直位置"
+
+#: screenkey:49
+msgid "make window persistent"
+msgstr "使窗口保持可见"
+
+#: screenkey:51
+msgid "set font size"
+msgstr "设置字体大小"
+
+#: screenkey:53
+msgid "set fixed area/window geometry"
+msgstr "设置固定区域/窗口几何形状"
+
+#: screenkey:55
+msgid "set key processing mode"
+msgstr "设置按键处理模式"
+
+#: screenkey:57
+msgid "backspace processing mode"
+msgstr "退格处理模式"
+
+#: screenkey:59
+msgid "modifiers visualization mode"
+msgstr "修饰符可视化模式"
+
+#: screenkey:61
+msgid "show only keys with modifiers pressed"
+msgstr "仅显示和修饰键一起按下的按键"
+
+#: screenkey:63
+msgid "span text over multiple lines"
+msgstr "将文本跨越多行"
+
+#: screenkey:65
+msgid "always show Shift when modifiers are pressed"
+msgstr "按下修饰符键时总是显示 Shift 键"
+
+#: screenkey:67
+msgid "disable visualization of whitespace"
+msgstr "禁用空白字符可视化"
+
+#: screenkey:69
+msgid "show settings dialog on start"
+msgstr "在启动时显示设置对话框"
+
+#: screenkey:71
+msgid "show on the specified screen number"
+msgstr "显示在指定编号的屏幕上"
+
+#: screenkey:73
+msgid "set font family/weight"
+msgstr "设置字体系列/字重"
+
+#: screenkey:75
+msgid "set font color"
+msgstr "设置字体颜色"
+
+#: screenkey:77
+msgid "background color"
+msgstr "背景颜色"
+
+#: screenkey:79
+msgid "window opacity (in range 0.0-1.0)"
+msgstr "窗口透明度 (范围 0.0 -1.0）"
+
+#: screenkey:81
+msgid "Ignore the specified KeySym"
+msgstr "忽略指定的按键名"
+
+#: screenkey:83
+msgid "Compress key repeats after the specified count"
+msgstr "在指定次数后压缩重复按键的显示"
+
+#: screenkey:85
+msgid "do not display anything until explicitly requested"
+msgstr "在明确要求之前不显示任何内容"
