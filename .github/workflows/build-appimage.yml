@@ -93,10 +93,15 @@ jobs:
           set -eu
           SP="AppDir/usr/lib/python${PYVER}/site-packages"
           mkdir -p "$SP" AppDir/usr/bin
-          # Build PyGObject / pycairo / dbus-python against the system GTK
-          # headers, installing the resulting wheels straight into AppDir.
-          # babel is needed at runtime by Screenkey.labelmanager.
-          pip3 install --no-deps --target="$SP" \
+          # PyGObject's setup.py imports `cairo` (pycairo) at module load and
+          # shells out to `pkg-config` to locate gobject-introspection. Under
+          # pip's default PEP 517 build isolation the system pycairo is hidden,
+          # so metadata generation fails with `metadata-generation-failed`.
+          # Install pycairo into the build env first, then build everything
+          # with --no-build-isolation so the existing pycairo, setuptools and
+          # pkg-config are visible to each sdist's setup.py.
+          pip3 install --no-deps pycairo
+          pip3 install --no-deps --no-build-isolation --target="$SP" \
             PyGObject pycairo dbus-python babel
 
       - name: Copy Screenkey package into AppDir
