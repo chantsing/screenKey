@@ -360,8 +360,11 @@ jobs:
           cp data/screenkey.desktop AppDir/screenkey.desktop
           # Desktop entry's Exec= must be a bare binary name; AppRun provides
           # the wrapping. Icon is referenced by name (resolved via hicolor).
-          sed -i 's|^Exec=.*|Exec=screenkey|' AppDir/screenkey.desktop
-          sed -i 's|^Icon=.*|Icon=screenkey|' AppDir/screenkey.desktop
+          # Modify BOTH desktop files (linuxdeploy reads from usr/share/applications).
+          for f in AppDir/screenkey.desktop AppDir/usr/share/applications/screenkey.desktop; do
+            sed -i 's|^Exec=.*|Exec=screenkey|' "$f"
+            sed -i 's|^Icon=.*|Icon=screenkey|' "$f"
+          done
 
           # 2. AppStream metainfo.
           mkdir -p AppDir/usr/share/metainfo
