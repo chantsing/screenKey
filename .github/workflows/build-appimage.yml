@@ -179,7 +179,7 @@ jobs:
           pip3 install meson-python meson ninja
           cd /tmp
           rm -rf PyGObject-3.48.2 pygobject-3.48.2.tar.gz
-          pip3 download --no-deps --no-binary=:all: PyGObject==3.48.2
+          pip3 download --no-deps --no-binary=:all: --no-build-isolation PyGObject==3.48.2
           tar xf pygobject-3.48.2.tar.gz
           cd PyGObject-3.48.2
           # Use --reconfigure to allow re-runs; -Dtests=false skips the test suite.
