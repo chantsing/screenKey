@@ -1,0 +1,374 @@
+name: Build AppImage (manylinux2.28)
+
+# Build a portable screenkey AppImage using the manylinux_2_28_x86_64 base
+# image (AlmaLinux 8 -> glibc 2.28) so the resulting AppImage runs on most
+# modern x86_64 Linux distributions.
+#
+# Pipeline overview
+#   1. Install system libs (gtk3 / x11 / dbus / slop / fontawesome).
+#   2. Use the manylinux-bundled CPython 3.11 and pip-install PyGObject,
+#      pycairo, dbus-python and babel (compiled against the system GTK
+#      headers) directly into the AppDir site-packages.
+#   3. Copy the Screenkey/ package directory into the AppDir site-packages
+#      and compile translations (.po -> .mo) with babel.
+#   4. Drop a `screenkey` launcher script into AppDir/usr/bin.
+#   5. Stage desktop/metainfo/icon + AppRun entry script.
+#   6. linuxdeploy + linuxdeploy-plugin-gtk bundle all runtime .so and
+#      girepository files into AppDir/usr/lib.
+#   7. appimagetool (run extracted, no FUSE) packs AppDir -> *.AppImage.
+#   8. AppImage is uploaded as a workflow artifact and (on tag) released.
+#
+# Why we don't run `python3 setup.py install`:
+#   setup.py declares `scripts=['screenkey']`, but the upstream `screenkey`
+#   launcher script is not present in this repository. Calling setup.py
+#   would fail with "file 'screenkey' does not exist". Instead we install
+#   the package by hand (copy + a launcher script identical to upstream).
+
+on:
+  push:
+    tags: ['v*']
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  APP_NAME: screenkey
+  PYVER: "3.11"
+  # CPython ABI tag used by the manylinux image (cp311 == CPython 3.11).
+  PYABI: cp311
+
+jobs:
+  build:
+    name: Build screenkey AppImage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64:latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          dnf install -y epel-release
+          dnf install -y \
+            gtk3 gtk3-devel \
+            adwaita-icon-theme \
+            gobject-introspection gobject-introspection-devel \
+            cairo-gobject-devel \
+            pango-devel atk-devel \
+            gdk-pixbuf2 gdk-pixbuf2-devel \
+            libX11 libX11-devel \
+            dbus dbus-libs dbus-devel \
+            libappindicator-gtk3 \
+            slop \
+            fontawesome-fonts \
+            google-noto-sans-cjk-ttc-fonts \
+            desktop-file-utils \
+            appstream \
+            wget file cpio \
+            gettext
+
+      - name: Pick manylinux Python (${{ env.PYVER }})
+        run: |
+          # manylinux ships multiple CPython builds under /opt/python.
+          # cp311-cp311 == CPython 3.11 (ABI tag: cp311).
+          PYBIN="/opt/python/${{ env.PYABI }}-${{ env.PYABI }}/bin"
+          echo "Using $(${PYBIN}/python3 --version) from ${PYBIN}"
+          ln -sf "${PYBIN}/python3" /usr/local/bin/python3
+          ln -sf "${PYBIN}/pip3"    /usr/local/bin/pip3
+          python3 -m pip install --upgrade pip setuptools wheel
+
+      - name: Compile translations (.po -> .mo)
+        run: |
+          # setup.cfg points compile_catalog at Screenkey/locale; babel is
+          # available via the manylinux image's site-packages.
+          python3 -m pip install babel
+          python3 setup.py compile_catalog
+
+      - name: Install Python runtime deps into AppDir
+        run: |
+          set -eu
+          SP="AppDir/usr/lib/python${PYVER}/site-packages"
+          mkdir -p "$SP" AppDir/usr/bin
+          # Build PyGObject / pycairo / dbus-python against the system GTK
+          # headers, installing the resulting wheels straight into AppDir.
+          # babel is needed at runtime by Screenkey.labelmanager.
+          pip3 install --no-deps --target="$SP" \
+            PyGObject pycairo dbus-python babel
+
+      - name: Copy Screenkey package into AppDir
+        run: |
+          set -eu
+          SP="AppDir/usr/lib/python${PYVER}/site-packages"
+          cp -a Screenkey "$SP/Screenkey"
+          # Sanity-check the package is importable.
+          PYTHONPATH="$SP" python3 -c 'import Screenkey; print(Screenkey.VERSION)'
+
+      - name: Drop the `screenkey` launcher (matches upstream)
+        run: |
+          # This is the upstream launcher script from
+          # https://gitlab.com/screenkey/screenkey/-/raw/master/screenkey
+          # Inlined here because the file is not present in this repo.
+          cat > AppDir/usr/bin/screenkey <<'PYEOF'
+          #!/usr/bin/env python3
+          # "screenkey" is distributed under GNU GPLv3+, WITHOUT ANY WARRANTY.
+          # Copyright(c) 2010-2012: Pablo Seminario <pabluk@gmail.com>
+          # Copyright(c) 2015-2020: wave++ "Yuri D'Elia" <wavexx@thregr.org>.
+
+          from Screenkey import *
+
+          import logging
+          import os
+          import re
+          from argparse import ArgumentParser
+
+
+          def parse_geom_fract(buf):
+              if len(buf) == 0:
+                  return 0
+              if buf[-1] == '%':
+                  v = int(buf[:-1])
+                  if v == 0:
+                      return 0
+                  return v / 100
+              return int(buf)
+
+
+          def geometry(string):
+              size = re.match(r'^(\d+%?)x(\d+%?)(?:([+-]\d+%?)([+-]\d+%?))?$', string)
+              if size is None:
+                  raise TypeError
+              w = parse_geom_fract(size.group(1))
+              h = parse_geom_fract(size.group(2))
+              if w == 0 or h == 0:
+                  raise TypeError
+              x = parse_geom_fract(size.group(3)) if size.group(3) else 0
+              y = parse_geom_fract(size.group(4)) if size.group(4) else 0
+              return [x, y, w, h]
+
+
+          def main():
+              ap = ArgumentParser(description=APP_DESC)
+              ap.add_argument("-d", "--debug", action="store_true",
+                              help=_("enable debugging"))
+              ap.add_argument("--no-systray", action="store_true",
+                              help=_("do not create system tray icon"))
+              ap.add_argument("-t", "--timeout", type=float, help=_("timeout in seconds"))
+              ap.add_argument("-p", "--position", choices=POSITIONS,
+                              help=_("set vertical position"))
+              ap.add_argument("--persist", action='store_true', default=None,
+                              help=_("make window persistent"))
+              ap.add_argument("--window", action='store_true', default=None,
+                              help=_("use a regular window for display (implies --persist)"))
+              ap.add_argument("-s", "--font-size", choices=FONT_SIZES,
+                              help=_("set font size"))
+              ap.add_argument("-g", "--geometry", type=geometry,
+                              help=_("set fixed area/window geometry"))
+              ap.add_argument("--key-mode", choices=KEY_MODES,
+                              help=_("set key processing mode"))
+              ap.add_argument("--bak-mode", choices=BAK_MODES,
+                              help=_("backspace processing mode"))
+              ap.add_argument("--mods-mode", choices=MODS_MODES,
+                              help=_("modifiers visualization mode"))
+              ap.add_argument("-m", "--mods-only", action="store_true", default=None,
+                              help=_("show only keys with modifiers pressed"))
+              ap.add_argument("--multiline", action="store_true", default=None,
+                              help=_("span text over multiple lines"))
+              ap.add_argument("--vis-shift", action="store_true", default=None,
+                              help=_("always show Shift when modifiers are pressed"))
+              ap.add_argument("--no-whitespace", dest='vis_space', action="store_false", default=None,
+                              help=_("disable visualization of whitespace"))
+              ap.add_argument("--show-settings", action="store_true",
+                              help=_("show settings dialog on start"))
+              ap.add_argument("--scr", dest='screen', type=int,
+                              help=_("show on the specified screen number"))
+              ap.add_argument("-f", "--font", dest='font_desc',
+                              help=_("set font family/weight"))
+              ap.add_argument("--font-color", dest='font_color',
+                              help=_("set font color"))
+              ap.add_argument("--bg-color", dest='bg_color',
+                              help=_("background color"))
+              ap.add_argument("--opacity", dest='opacity', type=float,
+                              help=_("window opacity (in range 0.0-1.0)"))
+              ap.add_argument("--ignore", action='append', metavar='KeySym', default=[],
+                              help=_("Ignore the specified KeySym"))
+              ap.add_argument("--compr-cnt", type=int, metavar='COUNT',
+                              help=_("Compress key repeats after the specified count"))
+              ap.add_argument("--start-disabled", action='store_true', default=None,
+                              help=_("do not display anything until explicitly requested"))
+              ap.add_argument('--version', action='version', version=VERSION,
+                              help=_("show version of screenkey"))
+              ap.add_argument("-M", "--mouse", action="store_true", default=None,
+                              help=_("show the mouse buttons"))
+              ap.add_argument("--mouse-fade", type=float, dest='button_hide_duration',
+                              help=_("Mouse buttons fade duration in seconds"))
+              args = ap.parse_args()
+
+              # Set options
+              options = Options()
+              for arg in ['timeout', 'position', 'persist', 'window', 'font_desc',
+                          'font_color', 'bg_color', 'font_size', 'geometry',
+                          'key_mode', 'bak_mode', 'mods_mode', 'mods_only',
+                          'multiline', 'vis_shift', 'vis_space', 'screen',
+                          'no_systray', 'opacity', 'ignore', 'compr_cnt',
+                          'start_disabled', 'mouse', 'button_hide_duration']:
+                  if getattr(args, arg) is not None:
+                      options[arg] = getattr(args, arg)
+
+              # Initialize logger
+              if args.debug:
+                  logging.basicConfig(level=logging.DEBUG)
+              else:
+                  logging.basicConfig(level=logging.INFO)
+              logger = logging.getLogger(APP_NAME)
+
+              import Screenkey.screenkey as sc
+              app = sc.Screenkey(logger=logger, options=options, show_settings=args.show_settings)
+              try:
+                  exit(app.run())
+              except KeyboardInterrupt:
+                  os._exit(0)
+
+
+          if __name__ == "__main__":
+              main()
+          PYEOF
+          chmod +x AppDir/usr/bin/screenkey
+
+      - name: Bundle the CPython interpreter
+        run: |
+          # manylinux's CPython is self-contained (no system-python linkage),
+          # so we can ship it inside the AppImage.
+          cp /opt/python/${{ env.PYABI }}-${{ env.PYABI }}/bin/python${PYVER} \
+             AppDir/usr/bin/python${PYVER}
+
+      - name: Stage desktop / icon / AppRun
+        run: |
+          set -eu
+          # 1. Desktop entry (root + usr/share/applications).
+          mkdir -p AppDir/usr/share/applications
+          cp data/screenkey.desktop AppDir/usr/share/applications/
+          cp data/screenkey.desktop AppDir/screenkey.desktop
+          # Desktop entry's Exec= must be a bare binary name; AppRun provides
+          # the wrapping. Icon is referenced by name (resolved via hicolor).
+          sed -i 's|^Exec=.*|Exec=screenkey|' AppDir/screenkey.desktop
+          sed -i 's|^Icon=.*|Icon=screenkey|' AppDir/screenkey.desktop
+
+          # 2. AppStream metainfo.
+          mkdir -p AppDir/usr/share/metainfo
+          cp data/org.thregr.screenkey.metainfo.xml AppDir/usr/share/metainfo/
+
+          # 3. Icons: copy every size Adwaita exposes for input-keyboard.
+          for sz in 16 22 24 32 48 64 96 256; do
+            src="/usr/share/icons/Adwaita/${sz}x${sz}/devices/input-keyboard.png"
+            if [ -f "$src" ]; then
+              mkdir -p "AppDir/usr/share/icons/hicolor/${sz}x${sz}/apps"
+              cp "$src" "AppDir/usr/share/icons/hicolor/${sz}x${sz}/apps/screenkey.png"
+            fi
+          done
+          # Scalable fallback (svg).
+          for src in /usr/share/icons/Adwaita/scalable/devices/input-keyboard-symbolic.svg \
+                     /usr/share/icons/Adwaita/scalable/devices/input-keyboard.svg; do
+            if [ -f "$src" ]; then
+              mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+              cp "$src" AppDir/usr/share/icons/hicolor/scalable/apps/screenkey.svg
+              break
+            fi
+          done
+          # .DirIcon used by file managers (top-level).
+          cp AppDir/usr/share/icons/hicolor/256x256/apps/screenkey.png AppDir/.DirIcon 2>/dev/null || true
+
+          # 4. Project static assets referenced at runtime.
+          mkdir -p AppDir/usr/share/screenkey/images
+          cp Screenkey/images/mouse.svg AppDir/usr/share/screenkey/images/ 2>/dev/null || true
+          # Compiled .mo locales were emitted under Screenkey/locale/*/*.mo
+          # by `setup.py compile_catalog` and are already inside the copied
+          # package directory in AppDir/usr/lib/python3.11/site-packages/Screenkey.
+
+          # 5. AppRun: sets env vars so the bundled python/gtk find their data
+          # inside AppDir, then exec's the launcher.
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PYTHONPATH="$HERE/usr/lib/python3.11/site-packages:$PYTHONPATH"
+          export GI_TYPELIB_PATH="$HERE/usr/lib/girepository-1.0:$GI_TYPELIB_PATH"
+          export GDK_PIXBUF_MODULE_FILE="$HERE/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+          export GTK_PATH="$HERE/usr/lib/gtk-3.0"
+          export XDG_DATA_DIRS="$HERE/usr/share:$XDG_DATA_DIRS"
+          export FONTCONFIG_PATH="$HERE/etc/fonts"
+          # -s: don't add user site-packages; -E: ignore PYTHON* env at start.
+          exec "$HERE/usr/bin/python3.11" -sE "$HERE/usr/bin/screenkey" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+      - name: Download linuxdeploy + appimagetool + GTK plugin
+        run: |
+          set -eu
+          # linuxdeploy (continuous build). FUSE is unavailable inside the
+          # container, so we extract the AppImage and run from squashfs-root.
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage --appimage-extract >/dev/null
+          rm linuxdeploy-x86_64.AppImage
+          mv squashfs-root linuxdeploy
+          # appimagetool (also extracted).
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          ./appimagetool-x86_64.AppImage --appimage-extract >/dev/null
+          rm appimagetool-x86_64.AppImage
+          mv squashfs-root appimagetool
+          # GTK3 plugin for linuxdeploy: bundles libgtk-3, girepository,
+          # gdk-pixbuf loaders, themes and fonts needed by GTK apps.
+          wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-plugin-gtk.sh
+
+      - name: Bundle runtime deps into AppDir (linuxdeploy + GTK plugin)
+        env:
+          DEPLOY_GTK_VERSION: "3"
+          ARCH: x86_64
+          APPDIR: ${{ github.workspace }}/AppDir
+        run: |
+          set -eu
+          export LD_LIBRARY_PATH="/usr/lib:/usr/lib64:$LD_LIBRARY_PATH"
+          # linuxdeploy walks the AppDir, finds the desktop file, follows the
+          # Exec/Icon references and copies every required .so (including GTK,
+          # girepository, gdk-pixbuf loaders) into AppDir/usr/lib. The GTK
+          # plugin additionally sets up loaders.cache, themes and fonts.
+          ./linuxdeploy/AppRun \
+            --appdir AppDir \
+            --desktop-file AppDir/screenkey.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/screenkey.png \
+            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/screenkey.svg \
+            --plugin gtk
+
+      - name: Pack AppImage (extracted appimagetool, no FUSE)
+        run: |
+          set -eu
+          # appimagetool normally mounts its own AppImage via FUSE, which is
+          # not available inside the manylinux container. --appimage-extract-and-run
+          # makes it extract itself on the fly and skip FUSE entirely.
+          ./appimagetool/AppRun --appimage-extract-and-run \
+            --comp gzip \
+            AppDir screenkey-x86_64.AppImage
+
+      - name: Inspect AppImage
+        run: |
+          ls -la screenkey-*.AppImage
+          file   screenkey-*.AppImage
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenkey-AppImage-x86_64
+          path: screenkey-*.AppImage
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: screenkey-*.AppImage
+          fail_on_unmatched_files: true
