@@ -70,7 +70,8 @@ jobs:
             appstream \
             wget file cpio \
             gettext \
-            pkgconf-pkg-config
+            pkgconf-pkg-config \
+            libffi-devel libmount-devel
 
       - name: Pick manylinux Python (${{ env.PYVER }})
         run: |
@@ -89,24 +90,43 @@ jobs:
           python3 -m pip install babel
           python3 setup.py compile_catalog
 
+      - name: Validate build prerequisites (pkg-config / python deps)
+        run: |
+          set -eu
+          # Fail EARLY with clear messages instead of the opaque
+          # `metadata-generation-failed` that pip wraps setup.py/meson errors in.
+          echo "== pkg-config modules =="
+          for mod in gobject-introspection-1.0 gtk+-3.0 cairo-gobject dbus-1; do
+            pkg-config --exists "$mod" && echo "OK  $mod ($(pkg-config --modversion "$mod"))" \
+              || { echo "MISSING $mod"; pkg-config --print-errors --exists "$mod"; exit 1; }
+          done
+          echo "== cairo Python headers (py3cairo.pc) =="
+          pip3 install --no-deps pycairo==1.26.0
+          python3 -c "import cairo; print('OK  pycairo', cairo.version_info)"
+          pkg-config --exists py3cairo && echo "OK  py3cairo.pc ($(pkg-config --modversion py3cairo))" \
+            || { echo "py3cairo.pc not on PKG_CONFIG_PATH after pycairo install"; \
+                 python3 -c "import cairo,os; print('cairo prefix:', os.path.dirname(cairo.__file__))"; \
+                 find /opt/python -name 'py3cairo.pc' 2>/dev/null || true; }
+          echo "== setuptools wheel version =="
+          pip3 show setuptools wheel | grep -E '^(Name|Version):'
+          echo "== pip version =="
+          pip3 --version
+
       - name: Install Python runtime deps into AppDir
         run: |
           set -eu
           SP="AppDir/usr/lib/python${PYVER}/site-packages"
           mkdir -p "$SP" AppDir/usr/bin
-          # PyGObject >=3.52 switched its build backend to meson-python
-          # (`build-backend = "mesonpy"`), which needs meson + ninja + an
-          # importable `mesonpy` module and pycairo at configure time. Under
-          # pip's default PEP 517 isolation the backend would be pulled
-          # automatically, but meson then re-runs pkg-config to locate
-          # gobject-introspection and the failure surfaces only as an opaque
-          # `metadata-generation-failed`. Pre-install the meson toolchain and
-          # pycairo into the build env, then build with --no-build-isolation so
-          # the mesonpy backend is importable and meson can see the system
-          # gobject-introspection / cairo-gobject headers via pkg-config.
-          pip3 install meson-python meson ninja pycairo
-          pip3 install --no-deps --no-build-isolation --target="$SP" \
-            PyGObject pycairo dbus-python babel
+          # PyGObject's setup.py does a top-level `import cairo` (pycairo) and
+          # calls pkg-config for gobject-introspection-1.0. Under pip's default
+          # PEP 517 build isolation the build env hides our already-installed
+          # pycairo and the failure surfaces as an opaque
+          # `metadata-generation-failed`. Pin to PyGObject==3.48.2 / pycairo==1.26.0
+          # (last stable versions that build with classic setuptools, no meson)
+          # and pass --no-build-isolation so setup.py can see pycairo + the
+          # system gobject-introspection headers via pkg-config.
+          pip3 install -vvv --no-deps --no-build-isolation --target="$SP" \
+            PyGObject==3.48.2 pycairo==1.26.0 dbus-python==1.3.2 babel==2.15.0
 
       - name: Copy Screenkey package into AppDir
         run: |
