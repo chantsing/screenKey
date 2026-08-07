@@ -171,6 +171,12 @@ jobs:
             || echo "WARN: pycairo.h not at expected location; PyGObject build may still fail"
 
           # ---- 3. Build PyGObject (now sees pycairo + py3cairo.pc) --------
+          # PyGObject 3.48.2 uses meson-python as its PEP 517 backend, so the
+          # meson toolchain must be importable in the build env (we use
+          # --no-build-isolation so meson can see the already-installed
+          # pycairo + py3cairo.pc we set up above). With py3cairo.pc in place,
+          # meson configure can locate cairo headers and proceed.
+          pip3 install meson-python meson ninja
           pip3 install -vvv --no-deps --no-build-isolation \
             PyGObject==3.48.2 dbus-python==1.3.2 babel==2.15.0
 
