@@ -79,9 +79,21 @@ jobs:
           # manylinux ships multiple CPython builds under /opt/python.
           # cp311-cp311 == CPython 3.11 (ABI tag: cp311).
           PYBIN="/opt/python/${{ env.PYABI }}-${{ env.PYABI }}/bin"
+          PYLIB="/opt/python/${{ env.PYABI }}-${{ env.PYABI }}/lib"
           echo "Using $(${PYBIN}/python3 --version) from ${PYBIN}"
           ln -sf "${PYBIN}/python3" /usr/local/bin/python3
           ln -sf "${PYBIN}/pip3"    /usr/local/bin/pip3
+          # manylinux CPython is statically linked (libpython3.11.a only, no
+          # libpython3.11.so). Some projects' meson builds link test binaries
+          # with `-lpython3.11` and would fail with `ld: cannot find -lpython3.11`.
+          # The standard manylinux workaround is a linker-script .so that points
+          # ld back at the static archive; the Python runtime symbols are still
+          # provided by the embedded libpython.a inside the interpreter executable.
+          if [ ! -f "${PYLIB}/libpython${PYVER}.so" ] && [ -f "${PYLIB}/libpython${PYVER}.a" ]; then
+            echo "INPUT(libpython${PYVER}.a)" > "${PYLIB}/libpython${PYVER}.so"
+            echo "Installed linker script ${PYLIB}/libpython${PYVER}.so -> libpython${PYVER}.a"
+            ls -la "${PYLIB}/libpython${PYVER}."*
+          fi
           python3 -m pip install --upgrade pip setuptools wheel
 
       - name: Compile translations (.po -> .mo)
@@ -189,27 +201,28 @@ jobs:
           pip3 download --no-deps --no-binary=:all: --no-build-isolation dbus-python==1.3.2
           tar xf dbus-python-1.3.2.tar.gz
           cd dbus-python-1.3.2
-          # Disable --no-undefined so test binaries linking against the missing
-          # libpython3.11.so don't fail (manylinux ships libpython3.11.a only).
-          # The actual dbus bindings (.so) build fine; only the test binaries
-          # need libpython at link time. `meson compile || true` lets the build
-          # finish, then we manually install just the bindings + Python files.
-          meson setup build --prefix=/usr/local --libdir=lib -Dtests=false \
-            -Db_lundef=false || {
+          # dbus-python 1.3.2 meson.build does `subdir('test')` unconditionally
+          # (ignores -Dtests=false). `test-import-repeatedly` links to
+          # -lpython3.11; we patched the missing .so above, but still avoid
+          # test targets to save build time. Comment-out the subdir line.
+          if grep -q "^subdir('test')" meson.build; then
+            sed -i.bak "s|^subdir('test')|# DISABLED by CI: subdir('test')|" meson.build
+            echo "Patched meson.build to remove test subdir"
+            grep -n "subdir" meson.build || true
+          fi
+          meson setup build --prefix=/usr/local --libdir=lib || {
             echo "===== meson setup failed; meson-log.txt ====="
             cat build/meson-logs/meson-log.txt 2>/dev/null || true
             exit 1
           }
-          meson compile -C build || true
-          # Verify the actual dbus bindings were built (ignore test failures).
-          ls -la build/_dbus_bindings*.so build/_dbus_glib_bindings*.so \
-            || { echo "dbus bindings were NOT built"; exit 1; }
-          # Manual install: copy .so + .py files into system site-packages.
-          SYS_SP="$(python3 -c 'import site; print(site.getsitepackages()[0])')"
-          cp -a build/_dbus_bindings*.so   "$SYS_SP/"
-          cp -a build/_dbus_glib_bindings*.so "$SYS_SP/"
-          mkdir -p "$SYS_SP/dbus"
-          cp -a dbus/*.py "$SYS_SP/dbus/"
+          meson compile -C build || {
+            echo "===== meson compile failed ====="
+            ls -la build/*.so build/*.so.* 2>/dev/null || true
+            exit 1
+          }
+          # The dbus extensions should now be fully built with no test failures.
+          ls -la build/_dbus_bindings*.so build/_dbus_glib_bindings*.so
+          meson install -C build
           # Sanity check.
           python3 -c "import dbus; print('OK dbus', dbus.__version__)"
           cd "$GITHUB_WORKSPACE"
