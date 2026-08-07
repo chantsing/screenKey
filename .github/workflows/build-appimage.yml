@@ -170,15 +170,34 @@ jobs:
           ls -la "$(pkg-config --cflags-only-I py3cairo | sed 's/^-I//')/pycairo.h" 2>/dev/null \
             || echo "WARN: pycairo.h not at expected location; PyGObject build may still fail"
 
-          # ---- 3. Build PyGObject (now sees pycairo + py3cairo.pc) --------
-          # PyGObject 3.48.2 uses meson-python as its PEP 517 backend, so the
-          # meson toolchain must be importable in the build env (we use
-          # --no-build-isolation so meson can see the already-installed
-          # pycairo + py3cairo.pc we set up above). With py3cairo.pc in place,
-          # meson configure can locate cairo headers and proceed.
+          # ---- 3. Build PyGObject directly with meson --------------------
+          # PyGObject 3.48.2 uses meson-python as its PEP 517 backend, but
+          # pip wraps meson's setup errors as opaque `metadata-generation-failed`
+          # and the actual meson error is hidden. Build meson directly so we
+          # see every pkg-config lookup, dependency resolution and compile
+          # error on the workflow log.
           pip3 install meson-python meson ninja
+          cd /tmp
+          rm -rf PyGObject-3.48.2 pygobject-3.48.2.tar.gz
+          pip3 download --no-deps --no-binary=:all: PyGObject==3.48.2
+          tar xf pygobject-3.48.2.tar.gz
+          cd PyGObject-3.48.2
+          # Use --reconfigure to allow re-runs; -Dtests=false skips the test suite.
+          # Python installs go to /usr/local/lib/python3.11/site-packages (same
+          # prefix as pycairo), from which we copy to AppDir below.
+          meson setup build --prefix=/usr/local --libdir=lib \
+            -Dpython=/usr/local/bin/python3 -Dtests=false || {
+            echo "===== meson setup failed; full meson-log.txt ====="
+            cat build/meson-logs/meson-log.txt 2>/dev/null || true
+            exit 1
+          }
+          meson compile -C build
+          meson install -C build
+          cd "$GITHUB_WORKSPACE"
+
+          # dbus-python and babel can still use pip (setuptools-based, no meson).
           pip3 install -vvv --no-deps --no-build-isolation \
-            PyGObject==3.48.2 dbus-python==1.3.2 babel==2.15.0
+            dbus-python==1.3.2 babel==2.15.0
 
           # ---- 4. Copy compiled artifacts into AppDir ---------------------
           for item in pycairo PyGObject gi cairo cairo/_cairo*.so \
