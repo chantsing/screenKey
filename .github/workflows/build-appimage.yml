@@ -196,14 +196,27 @@ jobs:
           pip3 install -vvv --no-deps --no-build-isolation babel==2.15.0
 
           # ---- 4. Copy compiled artifacts into AppDir ---------------------
+          # IMPORTANT: dbus-python's prebuilt wheel puts its native C
+          # extensions DIRECTLY in site-packages' TOP LEVEL, NOT under dbus/
+          #   site-packages/_dbus_bindings.cpython-311-x86_64-linux-gnu.so
+          #   site-packages/_dbus_glib_bindings.cpython-311-x86_64-linux-gnu.so
+          # These are imported with `from _dbus_bindings import ...` in
+          # dbus/types.py line 8 — if we only copy the `dbus/` directory the
+          # native module can't be found, producing:
+          #   ModuleNotFoundError: No module named '_dbus_bindings'
+          # The copy list below therefore uses shell glob expansion on
+          # `_dbus_*bindings*.so` so any native suffix is picked up.
           for item in pycairo PyGObject gi cairo cairo/_cairo*.so \
                        dbus dbus_python*.dist-info pycairo*.dist-info \
-                       PyGObject*.dist-info babel*.dist-info; do
+                       PyGObject*.dist-info babel*.dist-info \
+                       _dbus_*bindings*.so; do
             for src in $SYS_SP/$item; do
               [ -e "$src" ] && cp -a "$src" "$SP/"
             done
           done
-          PYTHONPATH="$SP" python3 -c 'import cairo, gi, dbus; print("imports OK from AppDir")'
+          # Verify both the pure-python dbus package AND its native C
+          # extension are importable from the fresh AppDir copy.
+          PYTHONPATH="$SP" python3 -c 'import cairo, gi, dbus, _dbus_bindings; print("imports OK from AppDir (dbus bindings: _dbus_bindings.__file__=" + _dbus_bindings.__file__ + ")")'
 
       - name: Copy Screenkey package into AppDir
         run: |
@@ -423,7 +436,7 @@ jobs:
           # explicitly even though linuxdeploy-plugin-gtk might already drag
           # them in, because we want to ENSURE the build-host (AlmaLinux 8)
           # versions are used, not accidentally-leaked host copies.
-          EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid libharfbuzz libfreetype libfontconfig libpango libpangocairo libpangoft2 libpng libthai libgraphite2 libpcre libpcre2 libselinux libsepol libcap libmount"
+          EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid libharfbuzz libfreetype libfontconfig libpango libpangocairo libpangoft2 libpng libthai libgraphite2 libpcre libpcre2 libselinux libsepol libcap libmount libdbus-1 libdbus-glib-1 libexpat libz"
 
           # find_soname <libname>
           # Prints the absolute path to the first matching SONAME entry from
@@ -782,7 +795,7 @@ jobs:
 
           # 2. Sanity checks: critical libs we know we absolutely require.
           echo "== Post-closure sanity checks =="
-          for check in "libffi.so.6" "libharfbuzz.so.0" "libfreetype.so.6" "libfontconfig.so.1" "libpango-1.0.so.0" "libgdk-3.so.0" "libgtk-3.so.0"; do
+          for check in "libffi.so.6" "libharfbuzz.so.0" "libfreetype.so.6" "libfontconfig.so.1" "libpango-1.0.so.0" "libgdk-3.so.0" "libgtk-3.so.0" "libdbus-1.so.3" "libexpat.so.1" "libz.so.1"; do
             if ls "$LIBDEST"/"$check"* >/dev/null 2>&1; then
               echo "OK  required: $check -> $(readlink -f "$LIBDEST"/"$check"* 2>/dev/null | head -n1)"
             else
