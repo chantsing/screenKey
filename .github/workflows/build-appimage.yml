@@ -383,9 +383,17 @@ jobs:
           # collect the transitive closure of libraries that live outside the
           # glibc/libgcc search paths, and copy them into AppDir/usr/lib so
           # linuxdeploy (and the runtime loader) can find them.
+          #
+          # NOTE: every construct below is kept strictly POSIX /bin/sh
+          # compatible (no bash-only process substitution, no local, no
+          # arrays, no [[) because manylinux containers run Actions' run:
+          # block via /bin/sh, and bash-only syntax produces the infamous
+          # "syntax error near unexpected token `<'".
           DYNL="AppDir/usr/lib/python${PYVER}/lib-dynload"
           LIBDEST="AppDir/usr/lib"
           mkdir -p "$LIBDEST"
+          TMP_LDD="$(mktemp /tmp/lddout.XXXXXX 2>/dev/null || echo /tmp/_ldd_screenkey)"
+          trap 'rm -f "$TMP_LDD"' EXIT INT TERM
           echo "== Scanning lib-dynload dependencies =="
           echo "lib-dynload contents:"
           ls -1 "$DYNL" 2>/dev/null || true
@@ -397,69 +405,97 @@ jobs:
           # is a safety net for any other indirect dependency added later.
           EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid"
 
-          copied=0
-          # ---- Explicit allow-list first (most reliable) -------------------
-          for libname in $EXPLICIT_ALLOWLIST; do
-            # Resolve the real .so.X SONAME (not the bare .so symlink).
-            soname="$(ldconfig -p 2>/dev/null | awk -v n="$libname" '$1 == n".so" || $1 ~ "^"n"\\.so\\.[0-9]" {print $4; exit}')"
-            if [ -z "$soname" ]; then
-              # ldconfig cache may be empty in containers; fall back to find.
-              soname="$(find /usr/lib64 /usr/lib /lib64 /lib -maxdepth 2 -name "${libname}.so*" -type f 2>/dev/null | head -n1 || true)"
+          # find_soname <libname>
+          # Prints the absolute path to the first matching SONAME entry from
+          # ldconfig (e.g. "/lib64/libffi.so.6"), or nothing. POSIX grep + sed + awk
+          # concatenation is used instead of awk variable-regex interpolation so
+          # the expression is interpreted identically on every *nix awk flavour.
+          find_soname() {
+            _fn="$1"
+            ldconfig -p 2>/dev/null \
+              | grep -E "(^|[[:space:]])${_fn}\.so(\.[0-9]+)?($|[[:space:]])" \
+              | awk '{print $NF}' \
+              | head -n1
+          }
+
+          _copy_lib() {
+            # Args: $1 = abs path to .so, $2 = label (for logging only)
+            _src="$1"
+            _label="$2"
+            [ -n "$_src" ] && [ -f "$_src" ] || return 1
+            _real="$(readlink -f "$_src")"
+            _soname="$(basename "$_src")"
+            _real_base="$(basename "$_real")"
+            if [ -e "$LIBDEST/$_real_base" ]; then
+              return 0   # already staged
             fi
-            if [ -n "$soname" ] && [ -f "$soname" ]; then
-              real="$(readlink -f "$soname")"
-              base_soname="$(basename "$soname")"
-              base_real="$(basename "$real")"
-              cp -a "$real" "$LIBDEST/$base_real"
-              if [ "$base_soname" != "$base_real" ]; then
-                ( cd "$LIBDEST" && ln -sf "$base_real" "$base_soname" )
+            cp -a "$_real" "$LIBDEST/$_real_base"
+            if [ "$_soname" != "$_real_base" ] && [ ! -e "$LIBDEST/$_soname" ]; then
+              ( cd "$LIBDEST" && ln -sf "$_real_base" "$_soname" )
+            fi
+            echo "OK  $_label: $_soname -> $_real_base"
+            _copied=$((_copied+1))
+            return 0
+          }
+
+          _copied=0
+          # ---- Explicit allow-list first (most reliable) -------------------
+          for _libname in $EXPLICIT_ALLOWLIST; do
+            _soname="$(find_soname "$_libname" || true)"
+            if [ -z "$_soname" ]; then
+              # ldconfig cache may be empty inside the container; fall back
+              # to find (matches the first real .so.X file, not the bare .so).
+              _soname="$(find /usr/lib64 /usr/lib /lib64 /lib -maxdepth 2 -name "${_libname}.so.*" -type f 2>/dev/null | head -n1 || true)"
+              if [ -z "$_soname" ]; then
+                _soname="$(find /usr/lib64 /usr/lib /lib64 /lib -maxdepth 2 -name "${_libname}.so" -type f 2>/dev/null | head -n1 || true)"
               fi
-              echo "OK  allow-list: $libname -> $base_real (SONAME: $base_soname)"
-              copied=$((copied+1))
-            else
-              echo "SKIP allow-list: $libname (not found on build host)"
+            fi
+            if ! _copy_lib "$_soname" "allow-list: $_libname"; then
+              echo "SKIP allow-list: $_libname (not found on build host)"
             fi
           done
 
           # ---- ldd safety-net pass (avoids glibc/gcc runtime) -------------
           # Skip libs whose SONAME starts with any of these prefixes.
-          SKIP_PREFIXES="libc.so libdl.so libm.so libpthread.so librt.so \
-                         libresolv.so libutil.so libnsl.so libnss_ libcrypt.so \
-                         ld-linux ld-linux-x86 libgcc_s.so libstdc++.so libgpg-error.so"
-          should_skip() {
-            local son="$1" pre
-            for pre in $SKIP_PREFIXES; do
-              case "$son" in
-                "$pre"*) return 0 ;;
-              esac
-            done
-            return 1
-          }
+          # NOTE: no bash local/readonly used; all vars prefixed with _ss_ to
+          # avoid clobbering the outer scope.
+          SKIP_PREFIXES="libc.so libdl.so libm.so libpthread.so librt.so libresolv.so libutil.so libnsl.so libnss_ libcrypt.so ld-linux ld-linux-x86 libgcc_s.so libstdc++.so libgpg-error.so"
 
           for so in "$DYNL"/*.so; do
             [ -f "$so" ] || continue
             # ldd prints lines such as:
             #   libffi.so.6 => /lib64/libffi.so.6 (0x...)
-            # We extract the absolute path (=> /path) for each entry.
-            while IFS= read -r line; do
-              path="$(echo "$line" | sed -n 's/.*=>[[:space:]]*\(\/[^[:space:]]*\).*/\1/p')"
-              [ -n "$path" ] && [ -f "$path" ] || continue
-              soname="$(basename "$path")"
-              if should_skip "$soname"; then continue; fi
-              # Already copied via allow-list?
-              if [ -e "$LIBDEST/$soname" ]; then continue; fi
-              real="$(readlink -f "$path")"
-              base_real="$(basename "$real")"
-              cp -a "$real" "$LIBDEST/$base_real"
-              if [ "$soname" != "$base_real" ] && [ ! -e "$LIBDEST/$soname" ]; then
-                ( cd "$LIBDEST" && ln -sf "$base_real" "$soname" )
+            # We first write the output to a temp file so we can `while read`
+            # it from a regular redirect (no bash process substitution needed).
+            ldd "$so" > "$TMP_LDD" 2>/dev/null || true
+            while IFS= read -r _lddline; do
+              # Extract the path after `=> /` up to the next whitespace.
+              _path="$(echo "$_lddline" | sed -n 's/.*=>[[:space:]]*\(\/[^[:space:]]*\).*/\1/p')"
+              [ -n "$_path" ] && [ -f "$_path" ] || continue
+              _soname="$(basename "$_path")"
+              # Skip if matches any prefix in SKIP_PREFIXES (POSIX case glob).
+              _ss_skip=0
+              for _pfx in $SKIP_PREFIXES; do
+                case "$_soname" in
+                  "$_pfx"*) _ss_skip=1; break ;;
+                esac
+              done
+              [ "$_ss_skip" -eq 1 ] && continue
+              # Already staged (by allow-list or earlier iteration)?
+              if [ -e "$LIBDEST/$_soname" ]; then continue; fi
+              _real="$(readlink -f "$_path")"
+              _real_base="$(basename "$_real")"
+              if [ -e "$LIBDEST/$_real_base" ]; then continue; fi
+              cp -a "$_real" "$LIBDEST/$_real_base"
+              if [ "$_soname" != "$_real_base" ] && [ ! -e "$LIBDEST/$_soname" ]; then
+                ( cd "$LIBDEST" && ln -sf "$_real_base" "$_soname" )
               fi
-              echo "OK  ldd-discovered: $soname -> $base_real (from $so)"
-              copied=$((copied+1))
-            done < <(ldd "$so" 2>/dev/null || true)
+              echo "OK  ldd-discovered: $_soname -> $_real_base (from $(basename "$so"))"
+              _copied=$((_copied+1))
+            done < "$TMP_LDD"
           done
 
-          echo "== Total runtime libs pre-staged: $copied =="
+          echo "== Total runtime libs pre-staged: $_copied =="
           ls -la "$LIBDEST" | head -n 40 || true
 
           # Sanity check: libffi.so.6 must now exist in AppDir/usr/lib.
