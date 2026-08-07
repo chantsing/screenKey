@@ -346,10 +346,24 @@ jobs:
 
       - name: Bundle the CPython interpreter
         run: |
+          set -eu
           # manylinux's CPython is self-contained (no system-python linkage),
           # so we can ship it inside the AppImage.
-          cp /opt/python/${{ env.PYABI }}-${{ env.PYABI }}/bin/python${PYVER} \
-             AppDir/usr/bin/python${PYVER}
+          PYROOT="/opt/python/${{ env.PYABI }}-${{ env.PYABI }}"
+          cp "$PYROOT/bin/python${PYVER}" "AppDir/usr/bin/python${PYVER}"
+          # Copy the Python stdlib into AppDir so the bundled interpreter can
+          # locate `encodings` and other core modules at runtime. Without this,
+          # python falls back to the build-time prefix (/opt/_internal/...)
+          # baked into the python-build-standalone binary and crashes with
+          # "ModuleNotFoundError: No module named 'encodings'" on every host.
+          # site-packages is skipped — it is already populated with the
+          # compiled third-party packages (pycairo/PyGObject/dbus-python/...).
+          for item in "$PYROOT/lib/python${PYVER}"/*; do
+            [ "$(basename "$item")" = "site-packages" ] && continue
+            cp -a "$item" "AppDir/usr/lib/python${PYVER}/"
+          done
+          # Sanity-check: encodings module must be present.
+          ls "AppDir/usr/lib/python${PYVER}/encodings/__init__.py"
 
       - name: Stage desktop / icon / AppRun
         run: |
@@ -402,14 +416,21 @@ jobs:
           cat > AppDir/AppRun <<'EOF'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
+          # PYTHONHOME makes the bundled CPython resolve its stdlib and
+          # site-packages relative to AppDir/usr instead of the build-time
+          # prefix (/opt/_internal/...) hardcoded in the python-build-standalone
+          # binary. Without it Python cannot find `encodings` and aborts.
+          export PYTHONHOME="$HERE/usr"
           export PYTHONPATH="$HERE/usr/lib/python3.11/site-packages:$PYTHONPATH"
           export GI_TYPELIB_PATH="$HERE/usr/lib/girepository-1.0:$GI_TYPELIB_PATH"
           export GDK_PIXBUF_MODULE_FILE="$HERE/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
           export GTK_PATH="$HERE/usr/lib/gtk-3.0"
           export XDG_DATA_DIRS="$HERE/usr/share:$XDG_DATA_DIRS"
           export FONTCONFIG_PATH="$HERE/etc/fonts"
-          # -s: don't add user site-packages; -E: ignore PYTHON* env at start.
-          exec "$HERE/usr/bin/python3.11" -sE "$HERE/usr/bin/screenkey" "$@"
+          # -s: don't add user site-packages. -E must NOT be used: it would
+          # ignore PYTHONHOME/PYTHONPATH and break stdlib + site-packages
+          # resolution inside the AppImage.
+          exec "$HERE/usr/bin/python3.11" -s "$HERE/usr/bin/screenkey" "$@"
           EOF
           chmod +x AppDir/AppRun
 
