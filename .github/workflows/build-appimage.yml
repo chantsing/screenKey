@@ -379,10 +379,26 @@ jobs:
           # them.  That breaks on any distribution whose libffi SONAME differs
           # from AlmaLinux 8's (e.g. Kali ships libffi.so.8 only), producing:
           #   ImportError: libffi.so.6: cannot open shared object file
-          # To fix it, we walk every lib-dynload/*.so, run ldd against each,
-          # collect the transitive closure of libraries that live outside the
-          # glibc/libgcc search paths, and copy them into AppDir/usr/lib so
-          # linuxdeploy (and the runtime loader) can find them.
+          #
+          # A related and more subtle problem is "partial library reuse": the
+          # GTK3 stack in the AppImage (libgtk-3, libpango, libgdk_pixbuf, ...)
+          # may transitively pick up HOST versions of libharfbuzz / libfreetype
+          # if linuxdeploy decided (correctly or by accident) NOT to bundle
+          # those.  The host harfbuzz on Kali (8.x+) was built against a much
+          # newer freetype that exports `FT_Get_Color_Glyph_Layer'; the bundled
+          # libfreetype.so.6 (from AlmaLinux 8, ~2.9.x) does NOT export it,
+          # so the loader ends up with:
+          #   Failed to load shared library 'libgdk-3.so.0' referenced by the
+          #   typelib: /lib/x86_64-linux-gnu/libharfbuzz.so.0: undefined symbol:
+          #   FT_Get_Color_Glyph_Layer
+          # followed by the cascading `gi.overrides.Gdk AssertionError`.
+          #
+          # To defeat both classes of problem we (a) force-copy the known
+          # "troublemaker" libs (ffi + freetype + harfbuzz + pango/font stack)
+          # and (b) run a full transitive ldd-closure copy AFTER linuxdeploy
+          # so that every NEEDED entry – direct AND indirect – of every .so
+          # under AppDir/usr (including lib-dynload) resolves to a copy shipped
+          # inside the image, closing any accidental host leak.
           #
           # NOTE: every construct below is kept strictly POSIX /bin/sh
           # compatible (no bash-only process substitution, no local, no
@@ -403,7 +419,11 @@ jobs:
           # AppImage project explicitly forbids) AND a copy-all-from-ldd pass.
           # The allow-list catches libffi reliably across rebuilds; the ldd pass
           # is a safety net for any other indirect dependency added later.
-          EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid"
+          # NOTE: `harfbuzz` and `freetype` and `fontconfig`/`pango` are listed
+          # explicitly even though linuxdeploy-plugin-gtk might already drag
+          # them in, because we want to ENSURE the build-host (AlmaLinux 8)
+          # versions are used, not accidentally-leaked host copies.
+          EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid libharfbuzz libfreetype libfontconfig libpango libpangocairo libpangoft2 libpng libthai libgraphite2 libpcre libpcre2 libselinux libsepol libcap libmount"
 
           # find_soname <libname>
           # Prints the absolute path to the first matching SONAME entry from
@@ -566,12 +586,47 @@ jobs:
           export GTK_PATH="$HERE/usr/lib/gtk-3.0"
           export XDG_DATA_DIRS="$HERE/usr/share:$XDG_DATA_DIRS"
           export FONTCONFIG_PATH="$HERE/etc/fonts"
-          # AppRun sets LD_LIBRARY_PATH so the loader first looks inside the
-          # AppImage for shared libs. This is the critical fix for the
-          # libffi.so.6 issue: the pre-staged libffi in usr/lib must be found
-          # before any host-installed version, otherwise on hosts that DO ship
-          # libffi.so.6 we still pick up the host copy and lose portability.
-          export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+
+          # --------------------------------------------------------------------
+          # Library search path: CLOSED inside the image, NO host fallbacks.
+          # --------------------------------------------------------------------
+          # Why not just `$HERE/usr/lib`?  Two real failures we've seen:
+          #
+          #   * Python's stdlib C extensions live under
+          #       $HERE/usr/lib/python3.11/lib-dynload/_ctypes.cpython-311-*.so
+          #     These are `dlopen()'d at runtime so linuxdeploy never scans
+          #     them; their NEEDED entries (libffi.so.6, libssl.so.1.1, ...)
+          #     are resolved by the loader AFTER the main binary starts, at
+          #     which point the loader must be able to find libffi via
+          #     LD_LIBRARY_PATH / DT_RUNPATH of the caller.
+          #
+          #   * Even when linuxdeploy-plugin-gtk DOES copy `libfreetype.so.6`
+          #     and `libharfbuzz.so.0` into usr/lib, the dynamic loader has
+          #     this nasty habit of "reusing" an already-open SONAME from the
+          #     host.  On Kali the host `libharfbuzz.so.0` is 8.x and links
+          #     against a host `libfreetype.so.6` that exports
+          #     `FT_Get_Color_Glyph_Layer' — a symbol that the *bundled*
+          #     freetype does NOT have.  Result: the loader opens the host
+          #     harfbuzz, tries to satisfy its import against the bundled
+          #     freetype, and dies with
+          #       undefined symbol: FT_Get_Color_Glyph_Layer
+          #     which then cascades to `gi.overrides.Gdk AssertionError`
+          #     because `libgdk-3.so.0`'s typelib load aborts.
+          #
+          # To defeat *both* bugs we (a) ship EVERY NEEDED lib of the
+          # bundled libpython/libgtk/python dynload files inside usr/lib (see
+          # the "Stage python-dynload runtime libs" + "Close transitive lib
+          # closure" steps), and (b) put `$HERE/usr/lib` FIRST in
+          # LD_LIBRARY_PATH *and* list the python dynload dir and the
+          # x86_64-linux-gnu multiarch path so dlopen() inside C extensions
+          # resolves against the image, never the host.
+          export LD_LIBRARY_PATH="$HERE/usr/lib/python3.11/lib-dynload:$HERE/usr/lib:$HERE/usr/lib/x86_64-linux-gnu:$HERE/lib:$HERE/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+          #
+          # GI repository typelibs (e.g. Gdk-3.0.typelib) can be loaded from
+          # more places than just GI_TYPELIB_PATH; to be 100% explicit we
+          # also prepend the in-image lib dirs to the XDG data search.
+          export XDG_DATA_DIRS="$HERE/usr/lib:$HERE/usr/share:$XDG_DATA_DIRS"
+
           # -s: don't add user site-packages. -E must NOT be used: it would
           # ignore PYTHONHOME/PYTHONPATH and break stdlib + site-packages
           # resolution inside the AppImage.
@@ -618,6 +673,154 @@ jobs:
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/screenkey.png \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/screenkey.svg \
             --plugin gtk
+
+      - name: Close transitive lib closure + patch ELF RUNPATH (post-linuxdeploy)
+        run: |
+          set -eu
+          # ------------------------------------------------------------------
+          # Why this step exists.
+          # ------------------------------------------------------------------
+          # linuxdeploy-plugin-gtk copies a curated list of GTK libraries but
+          # it explicitly DECLINES to copy certain libs that it believes are
+          # "provided by the distro" (e.g. libfreetype, libharfbuzz on some
+          # builds, libffi, libz ...).  That's fine for AppImages that run on
+          # a distro ABI-compatible with the build host — but screenkey is
+          # built on AlmaLinux 8 (glibc 2.28, libffi .so.6, freetype 2.9.x)
+          # and then runs on distros where:
+          #
+          #   * libffi.so.6 does NOT exist (Kali, Ubuntu 24.04+, Arch → only
+          #     libffi.so.8).  Error: ImportError: libffi.so.6: cannot open
+          #     shared object file.
+          #   * libharfbuzz.so.0 EXISTS but is a newer major version built
+          #     against a newer freetype (symbol FT_Get_Color_Glyph_Layer
+          #     missing from the bundled freetype). Error: undefined symbol
+          #     followed by gi.overrides.Gdk AssertionError.
+          #
+          # The "Stage python-dynload runtime libs" step before linuxdeploy
+          # already forces most of these into AppDir/usr/lib, but it runs
+          # BEFORE the GTK plugin has a chance to add its own .so files. Here,
+          # AFTER linuxdeploy, we do the full-closure pass for every ELF file
+          # now present under AppDir/usr (bin/, lib/, python*/lib-dynload,
+          # gtk-3.0 modules, gdk-pixbuf loaders, girepository private libs).
+          # For every "=> /usr/lib64/libxxx" returned by ldd that points
+          # OUTSIDE AppDir (i.e. the resolution would fall back to the host
+          # at runtime), we copy the library into AppDir/usr/lib, closing the
+          # loop once and for all.  glibc / libgcc / libstdc++ / ld-linux are
+          # still skipped per AppImage project guidance.
+          #
+          # As a final belt-and-braces move, we also install patchelf from
+          # EPEL (safe, no external deps) and write DT_RUNPATH=$ORIGIN/../lib
+          # (+$ORIGIN/../lib/python3.11/lib-dynload for the python binary)
+          # into every ELF executable and .so we touched.  RUNPATH is encoded
+          # directly in the ELF header and evaluated BEFORE LD_LIBRARY_PATH,
+          # so even if some downstream launcher strips LD_LIBRARY_PATH the
+          # libraries still resolve correctly.
+          LIBDEST="AppDir/usr/lib"
+          mkdir -p "$LIBDEST"
+          TMP_LDD2="$(mktemp /tmp/closure.XXXXXX 2>/dev/null || echo /tmp/_closure_screenkey)"
+          TMP_FIND="$(mktemp /tmp/findelf.XXXXXX 2>/dev/null || echo /tmp/_findelf_screenkey)"
+          trap 'rm -f "$TMP_LDD2" "$TMP_FIND"' EXIT INT TERM
+
+          SKIP_PREFIXES="libc.so libdl.so libm.so libpthread.so librt.so libresolv.so libutil.so libnsl.so libnss_ libcrypt.so ld-linux ld-linux-x86 libgcc_s.so libstdc++.so libgpg-error.so"
+
+          # 1. Gather every ELF file under AppDir/usr (bin/*.so, lib/*.so,
+          #    python*/lib-dynload/*.so, gtk-3.0 modules/*/*.so, ...).
+          find AppDir/usr -type f \( -path '*/bin/*' -o -name '*.so' -o -name '*.so.*' \) > "$TMP_FIND" 2>/dev/null || true
+
+          echo "== Close transitive ldd closure over $(wc -l < "$TMP_FIND") ELF files =="
+
+          # Iterate up to 8 rounds; each round may pull in new libs that in
+          # turn bring further NEEDED entries.  8 rounds is way more than
+          # enough for the GTK dependency graph.
+          ROUND=0
+          STAGED_THIS_ROUND=1
+          while [ "$STAGED_THIS_ROUND" -gt 0 ] && [ "$ROUND" -lt 8 ]; do
+            STAGED_THIS_ROUND=0
+            ROUND=$((ROUND+1))
+            while IFS= read -r elf; do
+              [ -n "$elf" ] && [ -f "$elf" ] || continue
+              # Only process actual ELF files (shell scripts, launcher .py
+              # files, data files etc. will make ldd complain uselessly).
+              case "$(file -b "$elf" 2>/dev/null)" in
+                *ELF*) : ;;
+                *) continue ;;
+              esac
+              ldd "$elf" > "$TMP_LDD2" 2>/dev/null || true
+              while IFS= read -r line; do
+                # Match lines of the form: libfoo.so.1 => /usr/lib64/libfoo.so.1 (0x...)
+                dep="$(echo "$line" | sed -n 's/.*=>[[:space:]]*\(\/[^[:space:]]*\).*/\1/p')"
+                [ -n "$dep" ] && [ -f "$dep" ] || continue
+                soname="$(basename "$dep")"
+                # Never bundle glibc / libgcc family.
+                sk=0
+                for pfx in $SKIP_PREFIXES; do
+                  case "$soname" in "$pfx"*) sk=1; break ;; esac
+                done
+                [ "$sk" -eq 1 ] && continue
+                # Skip if it points INTO AppDir already (linuxdeploy copied
+                # it previously).  `case` prefix match is POSIX.
+                case "$dep" in
+                  AppDir/*|./AppDir/*|"$PWD"/AppDir/*) continue ;;
+                  */AppDir/*) continue ;;
+                esac
+                # Already in LIBDEST?
+                real="$(readlink -f "$dep")"
+                real_base="$(basename "$real")"
+                if [ -e "$LIBDEST/$soname" ] || [ -e "$LIBDEST/$real_base" ]; then
+                  continue
+                fi
+                cp -a "$real" "$LIBDEST/$real_base"
+                if [ "$soname" != "$real_base" ] && [ ! -e "$LIBDEST/$soname" ]; then
+                  ( cd "$LIBDEST" && ln -sf "$real_base" "$soname" )
+                fi
+                echo "OK  closure round $ROUND: $soname -> $real_base (needed by $elf)"
+                STAGED_THIS_ROUND=$((STAGED_THIS_ROUND+1))
+              done < "$TMP_LDD2"
+            done < "$TMP_FIND"
+            echo "   round $ROUND staged $STAGED_THIS_ROUND new libs"
+          done
+
+          # 2. Sanity checks: critical libs we know we absolutely require.
+          echo "== Post-closure sanity checks =="
+          for check in "libffi.so.6" "libharfbuzz.so.0" "libfreetype.so.6" "libfontconfig.so.1" "libpango-1.0.so.0" "libgdk-3.so.0" "libgtk-3.so.0"; do
+            if ls "$LIBDEST"/"$check"* >/dev/null 2>&1; then
+              echo "OK  required: $check -> $(readlink -f "$LIBDEST"/"$check"* 2>/dev/null | head -n1)"
+            else
+              echo "WARN required: $check is NOT in usr/lib after closure pass"
+            fi
+          done
+
+          # 3. If patchelf is available, inject DT_RUNPATH = $ORIGIN/../lib
+          #    (plus dynload dir for the interpreter) into every AppImage ELF.
+          #    This survives cases where LD_LIBRARY_PATH gets stripped by
+          #    wrappers and also makes dlopen() from libpython resolve the
+          #    lib-dynload module deps against usr/lib deterministically.
+          if command -v patchelf >/dev/null 2>&1; then
+            echo "== patchelf: injecting DT_RUNPATH into AppDir ELFs =="
+            RPATH_COMMON='$ORIGIN/../lib:$ORIGIN/../lib/python3.11/lib-dynload:$ORIGIN/lib:$ORIGIN'
+            patchelf_count=0
+            while IFS= read -r elf; do
+              [ -f "$elf" ] || continue
+              case "$(file -b "$elf" 2>/dev/null)" in
+                *ELF*executable*|*ELF*"shared object"*) : ;;
+                *) continue ;;
+              esac
+              # Skip the runtime linker itself — patchelf on ld-linux breaks it.
+              case "$(basename "$elf")" in ld-linux*) continue ;; esac
+              if patchelf --set-rpath "$RPATH_COMMON" "$elf" 2>/dev/null; then
+                patchelf_count=$((patchelf_count+1))
+              else
+                # --force-rpath fallback for targets where RUNPATH write would
+                # otherwise require expanding the PT_LOAD segment.
+                patchelf --force-rpath --set-rpath "$RPATH_COMMON" "$elf" 2>/dev/null \
+                  && patchelf_count=$((patchelf_count+1)) \
+                  || echo "SKIP patchelf: $elf (not writeable/too small segments)"
+              fi
+            done < "$TMP_FIND"
+            echo "   patchelf runpath written to $patchelf_count ELFs"
+          else
+            echo "SKIP patchelf: binary not installed; relying on LD_LIBRARY_PATH from AppRun only"
+          fi
 
       - name: Pack AppImage (extracted appimagetool, no FUSE)
         run: |
