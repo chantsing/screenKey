@@ -177,6 +177,14 @@ jobs:
           # see every pkg-config lookup, dependency resolution and compile
           # error on the workflow log.
           pip3 install meson-python meson ninja
+          # pip installs meson/ninja binaries under /opt/python/cp311-cp311/bin
+          # which is NOT on the default PATH inside manylinux. meson-python
+          # locates meson via `shutil.which("meson")`, so symlink the binaries
+          # to /usr/local/bin (same approach used for python3/pip3 above).
+          ln -sf "$(python3 -c 'import sys; print(sys.prefix)')/bin/meson" /usr/local/bin/meson
+          ln -sf "$(python3 -c 'import sys; print(sys.prefix)')/bin/ninja" /usr/local/bin/ninja
+          command -v meson && meson --version
+          command -v ninja && ninja --version
           cd /tmp
           rm -rf PyGObject-3.48.2 pygobject-3.48.2.tar.gz
           pip3 download --no-deps --no-binary=:all: --no-build-isolation PyGObject==3.48.2
