@@ -79,21 +79,9 @@ jobs:
           # manylinux ships multiple CPython builds under /opt/python.
           # cp311-cp311 == CPython 3.11 (ABI tag: cp311).
           PYBIN="/opt/python/${{ env.PYABI }}-${{ env.PYABI }}/bin"
-          PYLIB="/opt/python/${{ env.PYABI }}-${{ env.PYABI }}/lib"
           echo "Using $(${PYBIN}/python3 --version) from ${PYBIN}"
           ln -sf "${PYBIN}/python3" /usr/local/bin/python3
           ln -sf "${PYBIN}/pip3"    /usr/local/bin/pip3
-          # manylinux CPython is statically linked (libpython3.11.a only, no
-          # libpython3.11.so). Some projects' meson builds link test binaries
-          # with `-lpython3.11` and would fail with `ld: cannot find -lpython3.11`.
-          # The standard manylinux workaround is a linker-script .so that points
-          # ld back at the static archive; the Python runtime symbols are still
-          # provided by the embedded libpython.a inside the interpreter executable.
-          if [ ! -f "${PYLIB}/libpython${PYVER}.so" ] && [ -f "${PYLIB}/libpython${PYVER}.a" ]; then
-            echo "INPUT(libpython${PYVER}.a)" > "${PYLIB}/libpython${PYVER}.so"
-            echo "Installed linker script ${PYLIB}/libpython${PYVER}.so -> libpython${PYVER}.a"
-            ls -la "${PYLIB}/libpython${PYVER}."*
-          fi
           python3 -m pip install --upgrade pip setuptools wheel
 
       - name: Compile translations (.po -> .mo)
@@ -182,50 +170,28 @@ jobs:
           ls -la "$(pkg-config --cflags-only-I py3cairo | sed 's/^-I//')/pycairo.h" 2>/dev/null \
             || echo "WARN: pycairo.h not at expected location; PyGObject build may still fail"
 
-          # ---- 3. Build PyGObject (setuptools) + dbus-python (meson direct) -
-          # PyGObject 3.44.1 builds with setuptools (sees pycairo + py3cairo.pc).
-          # dbus-python 1.2.18 (last setuptools version) fails with
-          # "No available output" on Python 3.11 / modern setuptools; 1.3.2
-          # uses meson-python, but pip wraps meson's errors as
-          # `metadata-generation-failed`. Build 1.3.2 directly with meson so
-          # we get the real pkg-config / dependency errors on the log.
+          # ---- 3. Build PyGObject (setuptools) + dbus-python (prebuilt whl) -
+          # Adaptability analysis for manylinux2.28 (AlmaLinux 8, glibc 2.28):
+          #   - pycairo 1.26.0:        setuptools build, OK (py3cairo.pc generated)
+          #   - PyGObject 3.44.1:      setuptools build, OK (requires g-i >=1.46.0;
+          #                           AlmaLinux 8 ships 1.56.1)
+          #   - PyGObject 3.48.2:      REJECTED (requires g-i >=1.64.0)
+          #   - dbus-python 1.2.18:    setuptools source build fails on Python 3.11
+          #                           with modern setuptools ("No available output")
+          #   - dbus-python 1.3.2:     meson-python backend; test binaries link
+          #                           -lpython3.11 which manylinux doesn't provide
+          #                           (static python: libpython3.11.a only)
+          # Solution for dbus-python: use the prebuilt cp311 linux_x86_64 wheel
+          # from the espressif PyPI mirror (released 2020, glibc << 2.28, so
+          # compatible with manylinux2.28). Skip meson entirely.
           pip3 install -vvv --no-deps --no-build-isolation PyGObject==3.44.1
-          pip3 install meson-python meson ninja
-          ln -sf "$(python3 -c 'import sys; print(sys.prefix)')/bin/meson" /usr/local/bin/meson
-          ln -sf "$(python3 -c 'import sys; print(sys.prefix)')/bin/ninja" /usr/local/bin/ninja
-          command -v meson && meson --version
-          command -v ninja && ninja --version
 
-          cd /tmp
-          rm -rf dbus-python-1.3.2 dbus-python-1.3.2.tar.gz
-          pip3 download --no-deps --no-binary=:all: --no-build-isolation dbus-python==1.3.2
-          tar xf dbus-python-1.3.2.tar.gz
-          cd dbus-python-1.3.2
-          # dbus-python 1.3.2 meson.build does `subdir('test')` unconditionally
-          # (ignores -Dtests=false). `test-import-repeatedly` links to
-          # -lpython3.11; we patched the missing .so above, but still avoid
-          # test targets to save build time. Comment-out the subdir line.
-          if grep -q "^subdir('test')" meson.build; then
-            sed -i.bak "s|^subdir('test')|# DISABLED by CI: subdir('test')|" meson.build
-            echo "Patched meson.build to remove test subdir"
-            grep -n "subdir" meson.build || true
-          fi
-          meson setup build --prefix=/usr/local --libdir=lib || {
-            echo "===== meson setup failed; meson-log.txt ====="
-            cat build/meson-logs/meson-log.txt 2>/dev/null || true
-            exit 1
-          }
-          meson compile -C build || {
-            echo "===== meson compile failed ====="
-            ls -la build/*.so build/*.so.* 2>/dev/null || true
-            exit 1
-          }
-          # The dbus extensions should now be fully built with no test failures.
-          ls -la build/_dbus_bindings*.so build/_dbus_glib_bindings*.so
-          meson install -C build
-          # Sanity check.
+          # dbus-python: download prebuilt wheel directly (no source build).
+          # The wheel tags (cp311-cp311-linux_x86_64) are accepted by pip when
+          # installed from a local file path.
+          wget -q https://dl.espressif.com/pypi/dbus-python/dbus_python-1.2.18-cp311-cp311-linux_x86_64.whl
+          pip3 install -vvv --no-deps dbus_python-1.2.18-cp311-cp311-linux_x86_64.whl
           python3 -c "import dbus; print('OK dbus', dbus.__version__)"
-          cd "$GITHUB_WORKSPACE"
 
           pip3 install -vvv --no-deps --no-build-isolation babel==2.15.0
 
