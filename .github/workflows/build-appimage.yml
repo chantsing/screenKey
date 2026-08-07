@@ -456,10 +456,12 @@ jobs:
       - name: Pack AppImage (extracted appimagetool, no FUSE)
         run: |
           set -eu
-          # appimagetool normally mounts its own AppImage via FUSE, which is
-          # not available inside the manylinux container. --appimage-extract-and-run
-          # makes it extract itself on the fly and skip FUSE entirely.
-          ./appimagetool/AppRun --appimage-extract-and-run \
+          # appimagetool was already extracted (squashfs-root -> appimagetool/)
+          # in the previous step, so we can just invoke its AppRun directly —
+          # no FUSE needed and no --appimage-extract-and-run flag required
+          # (that flag only works on the outer .AppImage wrapper, not the
+          # already-unpacked internal AppRun script).
+          ./appimagetool/AppRun \
             --comp gzip \
             AppDir screenkey-x86_64.AppImage
 
