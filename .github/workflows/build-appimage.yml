@@ -66,6 +66,7 @@ jobs:
             glib2-devel \
             pango-devel atk-devel \
             gdk-pixbuf2 gdk-pixbuf2-devel \
+            librsvg2 \
             libX11 libX11-devel \
             dbus dbus-libs dbus-devel \
             libappindicator-gtk3 \
@@ -456,7 +457,7 @@ jobs:
           # explicitly even though linuxdeploy-plugin-gtk might already drag
           # them in, because we want to ENSURE the build-host (AlmaLinux 8)
           # versions are used, not accidentally-leaked host copies.
-          EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid libharfbuzz libfreetype libfontconfig libpango libpangocairo libpangoft2 libpng libthai libgraphite2 libpcre libpcre2 libselinux libsepol libcap libmount libdbus-1 libdbus-glib-1 libexpat libz"
+          EXPLICIT_ALLOWLIST="libffi libssl libcrypto liblzma libbz2 libuuid libblkid libharfbuzz libfreetype libfontconfig libpango libpangocairo libpangoft2 libpng libthai libgraphite2 libpcre libpcre2 libselinux libsepol libcap libmount libdbus-1 libdbus-glib-1 libexpat libz librsvg-2 libcroco-0.6 libxml2"
 
           # find_soname <libname>
           # Prints the absolute path to the first matching SONAME entry from
@@ -616,6 +617,7 @@ jobs:
           export PYTHONPATH="$HERE/usr/lib/python3.11/site-packages:$PYTHONPATH"
           export GI_TYPELIB_PATH="$HERE/usr/lib/girepository-1.0:$GI_TYPELIB_PATH"
           export GDK_PIXBUF_MODULE_FILE="$HERE/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+          export GDK_PIXBUF_MODULEDIR="$HERE/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders"
           export GTK_PATH="$HERE/usr/lib/gtk-3.0"
           export XDG_DATA_DIRS="$HERE/usr/share:$XDG_DATA_DIRS"
           export FONTCONFIG_PATH="$HERE/etc/fonts"
@@ -712,6 +714,23 @@ jobs:
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/screenkey.png \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/screenkey.svg \
             --plugin gtk
+
+      - name: Regenerate gdk-pixbuf loaders.cache (bundle-local)
+        run: |
+          set -eu
+          # linuxdeploy-plugin-gtk writes absolute build-host paths into
+          # loaders.cache; at runtime the AppImage mounts at /tmp/.mount_xxx
+          # so those paths don't resolve. Regenerate against the bundled
+          # loaders dir and strip the directory prefix so entries are bare
+          # filenames resolved via GDK_PIXBUF_MODULEDIR (set in AppRun).
+          LOADERS_DIR="AppDir/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+          CACHE_FILE="AppDir/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+          mkdir -p "$LOADERS_DIR"
+          QUERY="$(command -v gdk-pixbuf-query-loaders || command -v gdk-pixbuf-query-loaders-64)"
+          GDK_PIXBUF_MODULEDIR="$LOADERS_DIR" "$QUERY" > "$CACHE_FILE"
+          sed -i 's|^".*/loaders/|"|' "$CACHE_FILE"
+          grep -q 'image/svg+xml' "$CACHE_FILE" \
+            || { echo "FATAL: SVG loader missing from loaders.cache"; exit 1; }
 
       - name: Bundle slop binary into AppDir
         # screenkey invokes `slop` as an external subprocess for the
