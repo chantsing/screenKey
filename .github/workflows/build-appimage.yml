@@ -846,10 +846,19 @@ jobs:
           # We set LD_LIBRARY_PATH=AppDir/usr/lib when invoking ldd so the
           # resolver behaves exactly like at AppRun runtime (which prepends
           # $HERE/usr/lib to LD_LIBRARY_PATH).
+          #
+          # NOTE: the ldd output is staged into the existing $TMP_LDD2 file
+          # (created at the top of this step and cleaned via trap) instead of
+          # using bash-only process substitution `<(...)`. GitHub Actions
+          # container jobs run `sh` by default, which doesn't support `<(...)`.
           echo "== slop NEEDED libs sanity check =="
           if [ -f AppDir/usr/bin/slop ]; then
             slop_missing=0
-            while IFS= read -r soname; do
+            LD_LIBRARY_PATH="$LIBDEST" ldd AppDir/usr/bin/slop 2>/dev/null > "$TMP_LDD2" || true
+            while IFS= read -r line; do
+              # Extract soname from an ldd line like
+              #   "libfoo.so.1 => /usr/lib64/libfoo.so.1 (0x...)"
+              soname="$(echo "$line" | sed -n 's/^[[:space:]]*\(lib[^[:space:]]*\).*/\1/p')"
               [ -n "$soname" ] || continue
               # Skip the SAME families the closure pass above intentionally
               # declines to bundle (glibc / libgcc / libstdc++ / libgpg-error /
@@ -863,7 +872,7 @@ jobs:
                 echo "WARN slop dep $soname is NOT in AppDir/usr/lib"
                 slop_missing=$((slop_missing+1))
               fi
-            done < <(LD_LIBRARY_PATH="$LIBDEST" ldd AppDir/usr/bin/slop 2>/dev/null | sed -n 's/^[[:space:]]*\(lib[^[:space:]]*\).*/\1/p')
+            done < "$TMP_LDD2"
             echo "slop missing-lib count: $slop_missing"
             # Hard-fail if any non-system lib is still missing — slop would
             # fail at runtime on slop-less distros otherwise.
