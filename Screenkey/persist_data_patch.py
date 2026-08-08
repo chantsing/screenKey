@@ -38,7 +38,7 @@ import json
 import os
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 import gi as _gi
@@ -193,20 +193,14 @@ class _DataFileWriter:
         # from the user's perspective.
         self._last_screen_markup = None
         # opening banner
-        self._emit({
-            "type": "init",
-            "path_hint": path,
-            # local UTC offset (seconds) at startup; stamps are normalised to
-            # UTC, this records the host's offset for downstream context.
-            "tz_local_offset": datetime.now(timezone.utc).astimezone().utcoffset().total_seconds(),
-        })
+        self._emit({"type": "init", "path_hint": path})
 
     @property
     def path(self) -> str:
         return self._path
 
     def _emit(self, record: dict) -> None:
-        record = {"ts": datetime.now(timezone.utc).isoformat(), **record}
+        record = {"ts": datetime.now().astimezone().isoformat(), **record}
         with self._lock:
             self._fh.write(json.dumps(record, ensure_ascii=False))
             self._fh.write("\n")
@@ -216,17 +210,7 @@ class _DataFileWriter:
 
     def append_item(self, index: int, item: KeyData) -> None:
         try:
-            stamp = item.stamp
-            if hasattr(stamp, "astimezone"):
-                # LabelManager creates stamps via datetime.now() (naive local
-                # time); normalise to UTC so the stamp matches the UTC ``ts``
-                # field emitted by _emit().  astimezone(timezone.utc) treats a
-                # naive datetime as system-local and converts it to true UTC;
-                # using .replace(tzinfo=utc) instead would merely relabel local
-                # wall-clock as UTC, off by the local UTC offset.
-                stamp_iso = stamp.astimezone(timezone.utc).isoformat()
-            else:
-                stamp_iso = str(stamp)
+            stamp_iso = item.stamp.isoformat() if hasattr(item.stamp, "isoformat") else str(item.stamp)
             markup = item.markup
             if isinstance(markup, bytes):
                 markup = markup.decode("utf-8", errors="replace")
@@ -303,10 +287,6 @@ _PATCH_ATTR = "_persist_data_patch_applied"
 _WRITER_ATTR = "_persist_data_writer"
 _LASTLEN_ATTR = "_persist_last_len"
 _LOGGER_ATTR = "_persist_logger"
-
-
-def _iso_ts() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def install(logger=None) -> Optional[bool]:
