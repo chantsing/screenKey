@@ -15,8 +15,13 @@ name: Build AppImage (manylinux2.28)
 #   5. Stage desktop/metainfo/icon + AppRun entry script.
 #   6. linuxdeploy + linuxdeploy-plugin-gtk bundle all runtime .so and
 #      girepository files into AppDir/usr/lib.
-#   7. appimagetool (run extracted, no FUSE) packs AppDir -> *.AppImage.
-#   8. AppImage is uploaded as a workflow artifact and (on tag) released.
+#   7. Stage the `slop` binary into AppDir/usr/bin (screenkey spawns it as
+#      a subprocess for interactive region selection); its NEEDED libs are
+#      picked up by the closure pass in step 8.
+#   8. Close transitive .so closure with ldd + inject DT_RUNPATH via
+#      patchelf, and verify slop's deps resolve inside AppDir/usr/lib.
+#   9. appimagetool (run extracted, no FUSE) packs AppDir -> *.AppImage.
+#  10. AppImage is uploaded as a workflow artifact and (on tag) released.
 #
 # Why we don't run `python3 setup.py install`:
 #   setup.py declares `scripts=['screenkey']`, but the upstream `screenkey`
@@ -600,6 +605,12 @@ jobs:
           export XDG_DATA_DIRS="$HERE/usr/share:$XDG_DATA_DIRS"
           export FONTCONFIG_PATH="$HERE/etc/fonts"
 
+          # Make bundled CLI tools (slop, etc.) discoverable when screenkey
+          # invokes them via subprocess (screenkey.py: on_btn_sel_geom runs
+          # `slop -f '%x %y %w %h %i'`). Prepending $HERE/usr/bin means the
+          # in-image slop wins over any host slop of a different version.
+          export PATH="$HERE/usr/bin:$PATH"
+
           # --------------------------------------------------------------------
           # Library search path: CLOSED inside the image, NO host fallbacks.
           # --------------------------------------------------------------------
@@ -686,6 +697,30 @@ jobs:
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/screenkey.png \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/screenkey.svg \
             --plugin gtk
+
+      - name: Bundle slop binary into AppDir
+        # screenkey invokes `slop` as an external subprocess for the
+        # interactive region/window selection feature (see
+        # Screenkey/screenkey.py: on_btn_sel_geom). slop is NOT picked up
+        # by linuxdeploy (which only follows the desktop Exec= binary), so
+        # we stage it manually here. The subsequent "Close transitive lib
+        # closure" step scans AppDir/usr/bin/* with ldd and will copy every
+        # NEEDED .so (libX11, libXext, libXrender, libGL, libglew, libpng,
+        # libcairo, ...) into AppDir/usr/lib automatically.
+        run: |
+          set -eu
+          mkdir -p AppDir/usr/bin
+          SLOP_SRC="$(command -v slop || true)"
+          if [ -z "$SLOP_SRC" ]; then
+            echo "FATAL: slop binary not found on the build host (was the 'slop' dnf package installed?)" >&2
+            exit 1
+          fi
+          cp -a "$SLOP_SRC" AppDir/usr/bin/slop
+          chmod 0755 AppDir/usr/bin/slop
+          echo "Bundled slop: $SLOP_SRC -> AppDir/usr/bin/slop"
+          echo "slop version: $(slop --version 2>&1 || echo 'unknown')"
+          echo "Direct NEEDED libs (transitive closure handled later):"
+          ldd AppDir/usr/bin/slop || true
 
       - name: Close transitive lib closure + patch ELF RUNPATH (post-linuxdeploy)
         run: |
@@ -803,6 +838,43 @@ jobs:
             fi
           done
 
+          # slop-specific sanity check: every direct NEEDED entry of the
+          # bundled slop binary must now resolve against AppDir/usr/lib
+          # (i.e. be present there). Anything still pointing at /usr/lib64
+          # means the closure pass missed it and slop would fall back to the
+          # host at runtime, which we want to avoid on no-slop distros.
+          # We set LD_LIBRARY_PATH=AppDir/usr/lib when invoking ldd so the
+          # resolver behaves exactly like at AppRun runtime (which prepends
+          # $HERE/usr/lib to LD_LIBRARY_PATH).
+          echo "== slop NEEDED libs sanity check =="
+          if [ -f AppDir/usr/bin/slop ]; then
+            slop_missing=0
+            while IFS= read -r soname; do
+              [ -n "$soname" ] || continue
+              # Skip the SAME families the closure pass above intentionally
+              # declines to bundle (glibc / libgcc / libstdc++ / libgpg-error /
+              # ld-linux). Anything else MUST be in AppDir/usr/lib, otherwise
+              # slop would silently fall back to the host on slop-less distros.
+              case "$soname" in
+                libc.so*|libdl.so*|libm.so*|libpthread.so*|librt.so*|libresolv.so*|libutil.so*|libnsl.so*|libnss_*|libcrypt.so*|ld-linux*|libgcc_s.so*|libstdc++.so*|libgpg-error.so*)
+                  continue ;;
+              esac
+              if ! ls "$LIBDEST"/"$soname"* >/dev/null 2>&1; then
+                echo "WARN slop dep $soname is NOT in AppDir/usr/lib"
+                slop_missing=$((slop_missing+1))
+              fi
+            done < <(LD_LIBRARY_PATH="$LIBDEST" ldd AppDir/usr/bin/slop 2>/dev/null | sed -n 's/^[[:space:]]*\(lib[^[:space:]]*\).*/\1/p')
+            echo "slop missing-lib count: $slop_missing"
+            # Hard-fail if any non-system lib is still missing — slop would
+            # fail at runtime on slop-less distros otherwise.
+            if [ "$slop_missing" -gt 0 ]; then
+              echo "FATAL: slop has $slop_missing unresolved non-system libs after closure pass" >&2
+              exit 1
+            fi
+          else
+            echo "WARN AppDir/usr/bin/slop not present, skipping slop lib check"
+          fi
+
           # 3. If patchelf is available, inject DT_RUNPATH = $ORIGIN/../lib
           #    (plus dynload dir for the interpreter) into every AppImage ELF.
           #    This survives cases where LD_LIBRARY_PATH gets stripped by
@@ -859,9 +931,66 @@ jobs:
           path: screenkey-*.AppImage
           if-no-files-found: error
 
+      - name: Generate SHA256 checksum (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -eu
+          # Filename is hardcoded by the "Pack AppImage" step above, so we
+          # can derive the checksum filename deterministically.
+          APPIMG="screenkey-x86_64.AppImage"
+          [ -f "$APPIMG" ] || { echo "FATAL: $APPIMG not found" >&2; exit 1; }
+          sha256sum "$APPIMG" > "${APPIMG}.sha256"
+          echo "== SHA256 =="
+          cat "${APPIMG}.sha256"
+
       - name: Attach to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: screenkey-*.AppImage
+          # Upload both the AppImage and its checksum file.
+          files: |
+            screenkey-x86_64.AppImage
+            screenkey-x86_64.AppImage.sha256
+          # Release title matches the tag name (e.g. "v1.5.2").
+          name: ${{ github.ref_name }}
+          # Let GitHub auto-generate release notes from commits/PRs since
+          # the previous release. Our `body` below is prepended to those
+          # auto-generated notes.
+          generate_release_notes: true
+          # Mark this as the "latest" release so it shows up on the repo
+          # home page and `releases/latest` URL.
+          make_latest: true
           fail_on_unmatched_files: true
+          body: |
+            ## Installation
+
+            1. Download `screenkey-x86_64.AppImage`
+            2. Make it executable: `chmod +x screenkey-x86_64.AppImage`
+            3. Run: `./screenkey-x86_64.AppImage`
+
+            ### Integrity verification (optional)
+
+            Download both `screenkey-x86_64.AppImage` and
+            `screenkey-x86_64.AppImage.sha256` into the same directory, then:
+
+            ```bash
+            sha256sum -c screenkey-x86_64.AppImage.sha256
+            ```
+
+            ## Bundled components
+
+            This AppImage is fully self-contained:
+            - CPython 3.11 (manylinux_2.28 / AlmaLinux 8 base, glibc 2.28+)
+            - GTK 3 + Adwaita icon theme + Font Awesome + Noto CJK fonts
+            - **slop** (interactive region/window selection)
+            - All required `.so` libraries (closed lib closure, no host fallbacks)
+
+            ## Minimum system requirements
+
+            - Linux x86_64
+            - glibc 2.28+ (RHEL 8 / AlmaLinux 8 / Ubuntu 18.04+ / Debian 10+)
+            - X11 (or XWayland for region selection via slop)
+
+            ---
+
+            Auto-generated release notes (commits/PRs since the previous release) follow below.
