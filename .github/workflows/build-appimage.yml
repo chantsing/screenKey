@@ -353,15 +353,19 @@ jobs:
               # Apply the optional data-permanence patch.  It monkey-patches
               # LabelManager so that every mutation of its in-memory
               # ``self.data`` list is also appended to a JSONL log on disk.
-              # Set SCREENKEY_DATA_FILE to a custom path (or empty string to
-              # disable the patch).  Defaults to
-              # $XDG_DATA_HOME/screenkey/keystrokes-<startup-ts>.jsonl
+              # The patch is OFF by default; set SCREENKEY_ENABLE_PERSIST to
+              # a non-empty value to enable it.  Set SCREENKEY_DATA_FILE to a
+              # custom path (or empty string to disable file output);
+              # defaults to $XDG_DATA_HOME/screenkey/keystrokes-<startup-ts>.jsonl
               try:
                   import Screenkey.persist_data_patch as _pdp
-                  if _pdp.install(logger=logger):
+                  _status = _pdp.install(logger=logger)
+                  if _status is True:
                       logger.info("data-persistence patch applied")
-                  else:
+                  elif _status is False:
                       logger.debug("data-persistence patch already active")
+                  else:  # None -> disabled
+                      logger.debug("data-persistence patch disabled (set SCREENKEY_ENABLE_PERSIST=1 to enable)")
               except Exception as _pdp_exc:
                   logger.debug("data-persistence patch failed to load: %s", _pdp_exc)
 

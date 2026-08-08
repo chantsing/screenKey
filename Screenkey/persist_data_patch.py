@@ -6,9 +6,11 @@
 # in-memory list of KeyData / ButtonData items) is also written to a
 # JSON Lines log on disk.
 #
-# The patch is safe to load more than once (idempotent).  The output
-# path can be overridden by the ``SCREENKEY_DATA_FILE`` environment
-# variable; otherwise it defaults to::
+# The patch is safe to load more than once (idempotent).  It is OFF by
+# default; set the ``SCREENKEY_ENABLE_PERSIST`` environment variable to
+# any non-empty value to enable it.  The output path can be overridden
+# by the ``SCREENKEY_DATA_FILE`` environment variable; otherwise it
+# defaults to::
 #
 #     $XDG_DATA_HOME/screenkey/keystrokes-<startup-ts>.jsonl
 #
@@ -191,7 +193,13 @@ class _DataFileWriter:
         # from the user's perspective.
         self._last_screen_markup = None
         # opening banner
-        self._emit({"type": "init", "path_hint": path})
+        self._emit({
+            "type": "init",
+            "path_hint": path,
+            # local UTC offset (seconds) at startup; stamps are normalised to
+            # UTC, this records the host's offset for downstream context.
+            "tz_local_offset": datetime.now(timezone.utc).astimezone().utcoffset().total_seconds(),
+        })
 
     @property
     def path(self) -> str:
@@ -208,7 +216,17 @@ class _DataFileWriter:
 
     def append_item(self, index: int, item: KeyData) -> None:
         try:
-            stamp_iso = item.stamp.isoformat() if hasattr(item.stamp, "isoformat") else str(item.stamp)
+            stamp = item.stamp
+            if hasattr(stamp, "astimezone"):
+                # LabelManager creates stamps via datetime.now() (naive local
+                # time); normalise to UTC so the stamp matches the UTC ``ts``
+                # field emitted by _emit().  astimezone(timezone.utc) treats a
+                # naive datetime as system-local and converts it to true UTC;
+                # using .replace(tzinfo=utc) instead would merely relabel local
+                # wall-clock as UTC, off by the local UTC offset.
+                stamp_iso = stamp.astimezone(timezone.utc).isoformat()
+            else:
+                stamp_iso = str(stamp)
             markup = item.markup
             if isinstance(markup, bytes):
                 markup = markup.decode("utf-8", errors="replace")
@@ -291,14 +309,23 @@ def _iso_ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def install(logger=None) -> bool:
+def install(logger=None) -> Optional[bool]:
     """Apply the persistence patch to ``LabelManager``.
 
-    Returns True if the patch was applied during this call, False if it
-    was already active.
+    The patch is opt-in: it is only applied when the
+    ``SCREENKEY_ENABLE_PERSIST`` environment variable is set to a
+    non-empty value.
+
+    Returns:
+        True  -- the patch was applied during this call.
+        False -- the patch was already active (idempotent guard).
+        None  -- the patch is disabled (SCREENKEY_ENABLE_PERSIST not set).
     """
     if getattr(LabelManager, _PATCH_ATTR, False):
         return False
+
+    if not os.environ.get("SCREENKEY_ENABLE_PERSIST"):
+        return None  # opt-in: disabled by default
 
     # ------------------------------------------------------------------
     # Save the original methods
