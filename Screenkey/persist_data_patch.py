@@ -39,6 +39,16 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
+import gi as _gi
+try:
+    _gi.require_version('GLib', '2.0')
+except Exception:
+    pass
+try:
+    _gi.require_version('Pango', '1.0')
+except Exception:
+    pass
+
 try:
     from gi.repository import GLib as _GLib
 except Exception:  # pragma: no cover - non-GTK environments (e.g. local tests)
